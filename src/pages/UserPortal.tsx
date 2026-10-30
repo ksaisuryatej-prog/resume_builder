@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Resume, JobRole, JobRecommendation, SkillProgress, RoadmapStep } from '../types';
+import { Resume, JobRecommendation, SkillProgress, RoadmapStep, User } from '../types';
 import { ResumeRenderer } from '../components/templates/ResumeRenderer';
+import { generateResumePdf } from '../utils/pdfGenerator';
 import {
   LayoutDashboard,
   FilePlus,
@@ -10,7 +11,7 @@ import {
   Compass,
   BarChart2,
   Route,
-  User,
+  User as UserIcon,
   LogOut,
   Save,
   Download,
@@ -28,11 +29,33 @@ import {
   ExternalLink,
   BookOpen,
   ArrowRight,
-  RefreshCw
+  RefreshCw,
+  Eye,
+  Key,
+  Shield,
+  Briefcase,
+  GraduationCap,
+  Code2,
+  Award,
+  Globe,
+  Mail,
+  Phone,
+  MapPin,
+  Check,
+  FileText
 } from 'lucide-react';
 
+interface AiReviewModalState {
+  isOpen: boolean;
+  title: string;
+  fieldLabel: string;
+  originalText: string;
+  suggestedText: string;
+  onApply: (approvedText: string) => void;
+}
+
 export const UserPortal: React.FC = () => {
-  const { user, token, userTab, setUserTab, currentResumeId, setCurrentResumeId, logout, setActiveView } = useAuth();
+  const { user, token, userTab, setUserTab, currentResumeId, setCurrentResumeId, logout, setActiveView, refreshUser } = useAuth();
 
   // Resume state
   const [resumes, setResumes] = useState<Resume[]>([]);
@@ -40,9 +63,13 @@ export const UserPortal: React.FC = () => {
   const [selectedTemplate, setSelectedTemplate] = useState<string>('professional');
   const [builderTab, setBuilderTab] = useState<'personal' | 'career' | 'education' | 'skills' | 'projects' | 'experience' | 'certifications' | 'additional'>('personal');
   const [isSaving, setIsSaving] = useState(false);
-  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [saveMessage, setSaveMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [activePreviewZoom, setActivePreviewZoom] = useState(100);
+
+  // Dedicated PDF Export state
+  const [exportingResume, setExportingResume] = useState<Resume | null>(null);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
 
   // Career recommendations state
   const [recommendations, setRecommendations] = useState<JobRecommendation[]>([]);
@@ -56,77 +83,168 @@ export const UserPortal: React.FC = () => {
   const [roadmapRoleTitle, setRoadmapRoleTitle] = useState<string>('');
   const [isLoadingRoadmap, setIsLoadingRoadmap] = useState(false);
 
-  // Initial resume template default
-  const defaultResume: Resume = {
-    id: 0,
-    user_id: user?.id || 0,
-    template_id: 'professional',
-    title: 'Software Developer Resume',
-    target_job_role: 'Full Stack Developer',
-    personal_info: {
-      fullName: user?.name || '',
-      email: user?.email || '',
-      phone: '+1 (555) 019-2834',
-      location: 'San Francisco, CA',
-      linkedin: 'linkedin.com/in/developer',
-      github: 'github.com/developer',
-      portfolio: 'developer.io'
-    },
-    career_summary: 'Passionate and detail-oriented Software Engineer with a solid background in full-stack architecture, API integration, and database management. Experienced in building scalable web applications and collaborating effectively across Agile engineering teams.',
-    career_objective: 'To join an innovative technology organization as a Full Stack Engineer where I can leverage my software development proficiencies to deliver robust user experiences.',
-    education: [
-      {
-        institution: 'University of Engineering & Technology',
-        degree: 'Bachelor of Science',
-        branch: 'Computer Science',
-        graduationYear: '2024',
-        cgpa: '3.80 / 4.0'
-      }
-    ],
-    skills: {
-      programmingLanguages: ['JavaScript', 'TypeScript', 'Python', 'SQL'],
-      frameworks: ['React.js', 'Node.js', 'Express.js', 'Tailwind CSS'],
-      databases: ['PostgreSQL', 'MongoDB'],
-      tools: ['Git', 'GitHub', 'Docker', 'VS Code'],
-      technicalSkills: ['RESTful APIs', 'Data Structures', 'JWT Authentication'],
-      softSkills: ['Problem Solving', 'Agile Teamwork', 'Technical Writing']
-    },
-    projects: [
-      {
-        title: 'CloudMetrics - Real-Time Dashboard',
-        description: 'Engineered a high-performance analytics web dashboard processing live telemetry events with sub-second response times.',
-        technologies: 'React, Node.js, Express, PostgreSQL',
-        link: 'https://github.com/developer/cloudmetrics',
-        responsibilities: 'Designed REST API endpoints with authentication and created indexed PostgreSQL queries.'
-      }
-    ],
-    experience: [
-      {
-        company: 'Apex Software Labs',
-        jobTitle: 'Associate Software Developer',
-        duration: 'June 2024 - Present',
-        responsibilities: 'Engineered responsive frontend components in React and optimized backend API query latency by 25%.',
-        achievements: 'Contributed to microservice migration and unit test coverage expansion to 85%.'
-      }
-    ],
-    certifications: [
-      {
-        name: 'AWS Certified Cloud Practitioner',
-        issuer: 'Amazon Web Services',
-        year: '2024'
-      }
-    ],
-    additional_sections: {
-      languages: ['English (Fluent)', 'Spanish (Conversational)'],
-      awards: ['Hackathon Finalist 2023'],
-      extracurricular: ['Open Source Contributor', 'Tech Club Mentor']
-    },
-    completion_percentage: 85,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
+  // AI Review Modal State
+  const [aiReviewModal, setAiReviewModal] = useState<AiReviewModalState>({
+    isOpen: false,
+    title: '',
+    fieldLabel: '',
+    originalText: '',
+    suggestedText: '',
+    onApply: () => {}
+  });
+
+  // Profile Form State
+  const [profileForm, setProfileForm] = useState({
+    name: user?.name || '',
+    email: user?.email || '',
+    currentPassword: '',
+    newPassword: '',
+    confirmNewPassword: ''
+  });
+  const [profileMessage, setProfileMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
+
+  // Dedicated AI Polish Tab State
+  const [aiPolishSection, setAiPolishSection] = useState<'summary' | 'objective' | 'experience' | 'projects' | 'skills'>('summary');
+  const [aiPolishTone, setAiPolishTone] = useState<'impact' | 'executive' | 'ats' | 'concise'>('impact');
+
+  // Templates definition
+  const templates = [
+    { id: 'professional', name: 'Professional Classic', category: 'Corporate', desc: 'Balanced dual-column format with authoritative navy styling. Recommended for corporate, tech, and engineering positions.' },
+    { id: 'modern', name: 'Modern Purple', category: 'Modern', desc: 'Contemporary card layout with vibrant purple accents, timeline indicators, and skill tags.' },
+    { id: 'minimal', name: 'Minimalist Clean', category: 'Clean', desc: 'Understated elegance emphasizing ample whitespace and stark typography for effortless scanning.' },
+    { id: 'creative', name: 'Creative Portfolio', category: 'Creative', desc: 'Dark sidebar layout with proficiency indicators, bold title typography, and prominent portfolio links.' },
+    { id: 'ats_friendly', name: 'ATS-Friendly Standard', category: 'ATS', desc: 'Single-column structure rigorously engineered for automated parsers, HR screening bots, and high ATS scores.' },
+    { id: 'fresher', name: 'Fresher / Student', category: 'Academic', desc: 'Education-first hierarchy showcasing capstone projects, academic honors, coursework, and campus leadership.' },
+    { id: 'tech_developer', name: 'Technical Developer', category: 'Engineering', desc: 'Monospace code font accents, categorized tech stack matrices, and direct GitHub repo links.' },
+    { id: 'executive', name: 'Executive Leadership', category: 'Corporate', desc: 'Strategic C-suite & senior management layout highlighting executive competencies, board milestones, and ROI metrics.' }
+  ];
+
+  // Helper to generate a clean, fresh blank resume initialized with user's actual credentials
+  const createNewBlankResume = (currentUser: User | null): Resume => {
+    const now = new Date().toISOString();
+    return {
+      id: 0,
+      user_id: currentUser?.id || 0,
+      template_id: 'professional',
+      title: currentUser?.name ? `${currentUser.name}'s Resume` : 'My Professional Resume',
+      target_job_role: 'Full Stack Developer',
+      personal_info: {
+        fullName: currentUser?.name || '',
+        email: currentUser?.email || '',
+        phone: '',
+        location: '',
+        linkedin: '',
+        github: '',
+        portfolio: ''
+      },
+      career_summary: '',
+      career_objective: '',
+      education: [],
+      skills: {
+        programmingLanguages: [],
+        frameworks: [],
+        databases: [],
+        tools: [],
+        technicalSkills: [],
+        softSkills: []
+      },
+      projects: [],
+      experience: [],
+      certifications: [],
+      additional_sections: {
+        languages: [],
+        awards: [],
+        extracurricular: []
+      },
+      completion_percentage: 20,
+      created_at: now,
+      updated_at: now
+    };
   };
 
-  // Fetch Resumes
+  // Helper to load high-quality starter demo data for quick testing
+  const loadStarterTemplateData = () => {
+    if (!currentResume) return;
+    const now = new Date().toISOString();
+    const demo: Resume = {
+      ...currentResume,
+      title: `${user?.name || 'Professional'}'s Software Engineer Resume`,
+      target_job_role: 'Full Stack Developer',
+      personal_info: {
+        fullName: user?.name || 'Professional Candidate',
+        email: user?.email || 'candidate@example.com',
+        phone: '+1 (555) 234-5678',
+        location: 'San Francisco, CA',
+        linkedin: 'linkedin.com/in/software-developer',
+        github: 'github.com/software-developer',
+        portfolio: 'developer.portfolio.dev'
+      },
+      career_summary: 'Passionate and results-oriented Software Engineer with strong background in designing scalable web architectures, high-throughput REST APIs, and responsive frontends using React, TypeScript, Node.js, and SQL databases. Adept at translating complex product requirements into resilient production solutions.',
+      career_objective: 'Aspiring to contribute engineering rigor and agile leadership to an innovative software engineering team, optimizing latency and delivering robust user experiences.',
+      education: [
+        {
+          institution: 'State University of Technology',
+          degree: 'Bachelor of Science in Computer Science',
+          branch: 'Computer Science & Engineering',
+          graduationYear: '2024',
+          cgpa: '3.85 / 4.0'
+        }
+      ],
+      skills: {
+        programmingLanguages: ['JavaScript', 'TypeScript', 'Python', 'SQL'],
+        frameworks: ['React.js', 'Node.js', 'Express.js', 'Tailwind CSS'],
+        databases: ['PostgreSQL', 'MySQL', 'Redis'],
+        tools: ['Git', 'GitHub', 'Docker', 'VS Code'],
+        technicalSkills: ['RESTful APIs', 'Data Structures', 'JWT Authentication', 'Microservices'],
+        softSkills: ['Problem Solving', 'Agile Collaboration', 'Technical Documentation']
+      },
+      projects: [
+        {
+          title: 'DevPulse - Cloud Sprint & Task Management Platform',
+          description: 'Developed full-stack agile workspace featuring real-time sprint boards, drag-and-drop workflow tracking, and automated email notifications.',
+          technologies: 'React, TypeScript, Node.js, PostgreSQL, Tailwind CSS',
+          link: 'https://github.com/developer/devpulse',
+          responsibilities: 'Engineered REST API with JWT authorization and created normalized database schema with indexed queries.'
+        },
+        {
+          title: 'CloudMetrics - Server Telemetry Dashboard',
+          description: 'Architected time-series telemetry dashboard processing live metrics for CPU, RAM, and disk I/O with sub-second response times.',
+          technologies: 'Node.js, Express, Redis, Chart.js, Docker',
+          link: 'https://github.com/developer/cloudmetrics',
+          responsibilities: 'Configured Redis pub/sub caching layer and designed real-time interactive charts.'
+        }
+      ],
+      experience: [
+        {
+          company: 'Acme Software Labs',
+          jobTitle: 'Associate Software Developer',
+          duration: 'June 2024 - Present',
+          responsibilities: 'Engineered customer-facing responsive dashboard panels in React and built microservice endpoints in Express.js. Reduced API query latency by 32% via database index tuning and query caching.',
+          achievements: 'Led TypeScript adoption across the core codebase, reducing runtime production exceptions by 40%.'
+        }
+      ],
+      certifications: [
+        {
+          name: 'AWS Certified Cloud Practitioner',
+          issuer: 'Amazon Web Services',
+          year: '2024'
+        }
+      ],
+      additional_sections: {
+        languages: ['English (Fluent)', 'Spanish (Conversational)'],
+        awards: ['First Place - Regional Hackathon 2023'],
+        extracurricular: ['Open Source Contributor', 'Tech Club Mentor']
+      },
+      completion_percentage: 95,
+      updated_at: now
+    };
+    setCurrentResume(demo);
+    setSaveMessage({ text: 'Sample starter data loaded into editor! Click Save to keep.', type: 'success' });
+    setTimeout(() => setSaveMessage(null), 4000);
+  };
+
+  // Fetch all resumes for the authenticated user
   const fetchResumes = async () => {
     try {
       const res = await fetch('/api/resumes', {
@@ -135,23 +253,29 @@ export const UserPortal: React.FC = () => {
       });
       if (res.ok) {
         const data = await res.json();
-        setResumes(data.resumes || []);
-        if (data.resumes && data.resumes.length > 0) {
+        const list: Resume[] = data.resumes || [];
+        setResumes(list);
+
+        if (list.length > 0) {
           if (currentResumeId) {
-            const found = data.resumes.find((r: Resume) => r.id === currentResumeId);
+            const found = list.find(r => r.id === currentResumeId);
             if (found) {
               setCurrentResume(found);
               setSelectedTemplate(found.template_id || 'professional');
             } else {
-              setCurrentResume(data.resumes[0]);
-              setSelectedTemplate(data.resumes[0].template_id || 'professional');
+              setCurrentResume(list[0]);
+              setSelectedTemplate(list[0].template_id || 'professional');
+              setCurrentResumeId(list[0].id);
             }
           } else if (!currentResume) {
-            setCurrentResume(data.resumes[0]);
-            setSelectedTemplate(data.resumes[0].template_id || 'professional');
+            setCurrentResume(list[0]);
+            setSelectedTemplate(list[0].template_id || 'professional');
+            setCurrentResumeId(list[0].id);
           }
-        } else {
-          setCurrentResume(defaultResume);
+        } else if (!currentResume) {
+          const fresh = createNewBlankResume(user);
+          setCurrentResume(fresh);
+          setSelectedTemplate(fresh.template_id || 'professional');
         }
       }
     } catch (err) {
@@ -219,10 +343,16 @@ export const UserPortal: React.FC = () => {
       fetchCareerRecommendations(selectedAnalysisRole || undefined);
     } else if (userTab === 'roadmap') {
       fetchRoadmap(selectedAnalysisRole || undefined);
+    } else if (userTab === 'profile' && user) {
+      setProfileForm(prev => ({
+        ...prev,
+        name: user.name || '',
+        email: user.email || ''
+      }));
     }
   }, [userTab]);
 
-  // Handle Save Resume
+  // Handle Save Resume - 100% Reliable Persistence
   const handleSaveResume = async () => {
     if (!currentResume) return;
     setIsSaving(true);
@@ -231,7 +361,8 @@ export const UserPortal: React.FC = () => {
     try {
       const payload = {
         ...currentResume,
-        template_id: selectedTemplate
+        template_id: selectedTemplate,
+        title: currentResume.title?.trim() || `${currentResume.personal_info?.fullName || 'Professional'}'s Resume`
       };
 
       let res;
@@ -259,44 +390,107 @@ export const UserPortal: React.FC = () => {
 
       if (res.ok) {
         const data = await res.json();
-        setCurrentResume(data.resume);
-        setSaveMessage('Resume saved successfully!');
-        fetchResumes();
-        setTimeout(() => setSaveMessage(null), 3500);
+        const saved: Resume = data.resume;
+        setCurrentResume(saved);
+        setCurrentResumeId(saved.id);
+        await fetchResumes();
+        setSaveMessage({ text: `Resume successfully saved to database (ID #${saved.id})!`, type: 'success' });
+        setTimeout(() => setSaveMessage(null), 4000);
       } else {
-        setSaveMessage('Error saving resume.');
+        const errData = await res.json().catch(() => ({}));
+        setSaveMessage({ text: errData.error || 'Failed to save resume.', type: 'error' });
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Save resume error:', err);
-      setSaveMessage('Failed to save resume.');
+      setSaveMessage({ text: err.message || 'Network error saving resume.', type: 'error' });
     } finally {
       setIsSaving(false);
     }
   };
 
-  // Download PDF
-  const handleDownloadPdf = () => {
-    const element = document.getElementById('resume-preview-document');
-    if (!element) return;
+  // Universal PDF Download Function - works from Builder, Cards, or Dashboard
+  const handleDownloadPdf = async (targetResume?: Resume) => {
+    const resumeToExport = targetResume || currentResume;
+    if (!resumeToExport) return;
 
-    // Use html2pdf if available on window
-    const html2pdf = (window as any).html2pdf;
-    if (html2pdf) {
-      const opt = {
-        margin: [5, 5, 5, 5],
-        filename: `${currentResume?.personal_info?.fullName || 'Resume'}_${currentResume?.target_job_role || 'Craft'}.pdf`,
-        image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, logging: false },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-      };
-      html2pdf().set(opt).from(element).save();
-    } else {
-      window.print();
+    setIsExportingPdf(true);
+    setExportingResume(resumeToExport);
+
+    try {
+      const templateToUse = targetResume ? (targetResume.template_id || 'professional') : selectedTemplate;
+      const result = await generateResumePdf(resumeToExport, templateToUse);
+      if (result.success) {
+        setSaveMessage({
+          text: `PDF downloaded: ${result.filename} (${result.pageCount} page${result.pageCount > 1 ? 's' : ''})`,
+          type: 'success'
+        });
+        setTimeout(() => setSaveMessage(null), 4500);
+      } else {
+        setSaveMessage({
+          text: `PDF generation failed: ${result.error || 'Please try again.'}`,
+          type: 'error'
+        });
+      }
+    } catch (err: any) {
+      console.error('PDF generation error:', err);
+      setSaveMessage({
+        text: `Error generating PDF: ${err.message || 'Unknown error'}`,
+        type: 'error'
+      });
+    } finally {
+      setIsExportingPdf(false);
+      setExportingResume(null);
     }
   };
 
-  // AI Helper Functions
-  const handleAiGenerateSummary = async () => {
+  // Duplicate Resume Function
+  const handleDuplicateResume = async (resumeId: number) => {
+    try {
+      const res = await fetch(`/api/resumes/${resumeId}/duplicate`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: 'include'
+      });
+      if (res.ok) {
+        const data = await res.json();
+        await fetchResumes();
+        setSaveMessage({ text: `Resume duplicated as "${data.resume.title}"!`, type: 'success' });
+        setTimeout(() => setSaveMessage(null), 4000);
+      } else {
+        setSaveMessage({ text: 'Failed to duplicate resume.', type: 'error' });
+      }
+    } catch (err) {
+      console.error('Duplicate error:', err);
+      setSaveMessage({ text: 'Error duplicating resume.', type: 'error' });
+    }
+  };
+
+  // Delete Resume Function
+  const handleDeleteResume = async (resumeId: number) => {
+    if (!window.confirm('Are you sure you want to delete this resume? This cannot be undone.')) return;
+    try {
+      const res = await fetch(`/api/resumes/${resumeId}`, {
+        method: 'DELETE',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: 'include'
+      });
+      if (res.ok) {
+        if (currentResume?.id === resumeId) {
+          const fresh = createNewBlankResume(user);
+          setCurrentResume(fresh);
+          setCurrentResumeId(null);
+        }
+        await fetchResumes();
+        setSaveMessage({ text: 'Resume deleted successfully.', type: 'success' });
+        setTimeout(() => setSaveMessage(null), 3000);
+      }
+    } catch (err) {
+      console.error('Delete error:', err);
+    }
+  };
+
+  // AI Helper: Generate Professional Summary with Review Modal
+  const handleAiGenerateSummary = async (tone: string = 'impact') => {
     if (!currentResume) return;
     setIsAiLoading(true);
     try {
@@ -315,11 +509,12 @@ export const UserPortal: React.FC = () => {
         },
         body: JSON.stringify({
           type: 'summary',
-          fullName: currentResume.personal_info?.fullName,
-          targetJobRole: currentResume.target_job_role,
+          fullName: currentResume.personal_info?.fullName || user?.name,
+          targetJobRole: currentResume.target_job_role || 'Software Engineer',
           skills: allSkills,
           education: currentResume.education?.[0]?.degree,
-          existingSummary: currentResume.career_summary
+          existingSummary: currentResume.career_summary,
+          tone
         }),
         credentials: 'include'
       });
@@ -327,7 +522,19 @@ export const UserPortal: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         if (data.result) {
-          setCurrentResume(prev => prev ? ({ ...prev, career_summary: data.result }) : null);
+          setAiReviewModal({
+            isOpen: true,
+            title: 'Review AI Professional Summary',
+            fieldLabel: 'Professional Summary',
+            originalText: currentResume.career_summary || '(No existing summary provided)',
+            suggestedText: data.result,
+            onApply: (approvedText: string) => {
+              setCurrentResume(prev => prev ? ({ ...prev, career_summary: approvedText }) : null);
+              setAiReviewModal(prev => ({ ...prev, isOpen: false }));
+              setSaveMessage({ text: 'Summary updated! Remember to click Save to persist changes.', type: 'success' });
+              setTimeout(() => setSaveMessage(null), 3500);
+            }
+          });
         }
       }
     } catch (err) {
@@ -337,6 +544,7 @@ export const UserPortal: React.FC = () => {
     }
   };
 
+  // AI Helper: Generate Career Objective with Review Modal
   const handleAiGenerateObjective = async () => {
     if (!currentResume) return;
     setIsAiLoading(true);
@@ -358,7 +566,19 @@ export const UserPortal: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         if (data.result) {
-          setCurrentResume(prev => prev ? ({ ...prev, career_objective: data.result }) : null);
+          setAiReviewModal({
+            isOpen: true,
+            title: 'Review AI Career Objective',
+            fieldLabel: 'Career Objective',
+            originalText: currentResume.career_objective || '(No existing objective provided)',
+            suggestedText: data.result,
+            onApply: (approvedText: string) => {
+              setCurrentResume(prev => prev ? ({ ...prev, career_objective: approvedText }) : null);
+              setAiReviewModal(prev => ({ ...prev, isOpen: false }));
+              setSaveMessage({ text: 'Objective updated! Remember to click Save to persist changes.', type: 'success' });
+              setTimeout(() => setSaveMessage(null), 3500);
+            }
+          });
         }
       }
     } catch (err) {
@@ -368,6 +588,7 @@ export const UserPortal: React.FC = () => {
     }
   };
 
+  // AI Helper: Improve Project Description with Review Modal
   const handleAiImproveProject = async (index: number) => {
     if (!currentResume || !currentResume.projects?.[index]) return;
     setIsAiLoading(true);
@@ -390,9 +611,21 @@ export const UserPortal: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         if (data.result) {
-          const updatedProjects = [...(currentResume.projects || [])];
-          updatedProjects[index] = { ...proj, description: data.result };
-          setCurrentResume(prev => prev ? ({ ...prev, projects: updatedProjects }) : null);
+          setAiReviewModal({
+            isOpen: true,
+            title: `Review AI Enhancement for Project: ${proj.title}`,
+            fieldLabel: 'Project Description',
+            originalText: proj.description,
+            suggestedText: data.result,
+            onApply: (approvedText: string) => {
+              const updatedProjects = [...(currentResume.projects || [])];
+              updatedProjects[index] = { ...proj, description: approvedText };
+              setCurrentResume(prev => prev ? ({ ...prev, projects: updatedProjects }) : null);
+              setAiReviewModal(prev => ({ ...prev, isOpen: false }));
+              setSaveMessage({ text: 'Project description updated! Click Save to persist.', type: 'success' });
+              setTimeout(() => setSaveMessage(null), 3500);
+            }
+          });
         }
       }
     } catch (err) {
@@ -402,6 +635,7 @@ export const UserPortal: React.FC = () => {
     }
   };
 
+  // AI Helper: Improve Experience Responsibilities with Review Modal
   const handleAiImproveExperience = async (index: number) => {
     if (!currentResume || !currentResume.experience?.[index]) return;
     setIsAiLoading(true);
@@ -423,9 +657,21 @@ export const UserPortal: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         if (data.result) {
-          const updatedExp = [...(currentResume.experience || [])];
-          updatedExp[index] = { ...exp, responsibilities: data.result };
-          setCurrentResume(prev => prev ? ({ ...prev, experience: updatedExp }) : null);
+          setAiReviewModal({
+            isOpen: true,
+            title: `Review AI Enhancement for Experience: ${exp.jobTitle}`,
+            fieldLabel: 'Experience Responsibilities',
+            originalText: exp.responsibilities,
+            suggestedText: data.result,
+            onApply: (approvedText: string) => {
+              const updatedExp = [...(currentResume.experience || [])];
+              updatedExp[index] = { ...exp, responsibilities: approvedText };
+              setCurrentResume(prev => prev ? ({ ...prev, experience: updatedExp }) : null);
+              setAiReviewModal(prev => ({ ...prev, isOpen: false }));
+              setSaveMessage({ text: 'Experience updated! Click Save to persist.', type: 'success' });
+              setTimeout(() => setSaveMessage(null), 3500);
+            }
+          });
         }
       }
     } catch (err) {
@@ -455,56 +701,183 @@ export const UserPortal: React.FC = () => {
       });
       if (res.ok) {
         const data = await res.json();
-        // Update local list
         setSkillProgressList(prev => {
-          const existing = prev.findIndex(p => p.skill_name.toLowerCase() === skillName.toLowerCase() && p.job_role_id === selectedAnalysisRole);
-          if (existing >= 0) {
+          const existingIndex = prev.findIndex(p => p.skill_name.toLowerCase() === skillName.toLowerCase() && p.job_role_id === selectedAnalysisRole);
+          if (existingIndex >= 0) {
             const next = [...prev];
-            next[existing] = data.progress;
+            next[existingIndex] = data.progress;
             return next;
           }
           return [...prev, data.progress];
         });
       }
     } catch (err) {
-      console.error('Failed to update progress:', err);
+      console.error('Failed to update skill progress:', err);
     }
   };
 
-  // Templates list
-  const templates = [
-    { id: 'professional', name: 'Professional Classic', desc: 'Navy executive headers & balanced columns' },
-    { id: 'modern', name: 'Modern Purple', desc: 'Contemporary purple gradient & timeline cards' },
-    { id: 'minimal', name: 'Minimalist Clean', desc: 'Ample whitespace & stark typographic hierarchy' },
-    { id: 'creative', name: 'Creative Portfolio', desc: 'Dark sidebar, graphic rating meters & links' },
-    { id: 'ats_friendly', name: 'ATS-Friendly Standard', desc: 'Single-column structure for 100% parser passing' },
-    { id: 'fresher', name: 'Fresher / Student', desc: 'Academic coursework, capstones & honors' },
-    { id: 'tech_developer', name: 'Technical Developer', desc: 'Monospace badges, repos & stack tags' },
-    { id: 'executive', name: 'Executive Leadership', desc: 'Strategic milestones & competency matrix' }
-  ];
+  // Profile Update Handler
+  const handleUpdateProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsUpdatingProfile(true);
+    setProfileMessage(null);
+
+    if (profileForm.newPassword && profileForm.newPassword !== profileForm.confirmNewPassword) {
+      setProfileMessage({ text: 'New passwords do not match.', type: 'error' });
+      setIsUpdatingProfile(false);
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/auth/profile', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          name: profileForm.name,
+          email: profileForm.email,
+          currentPassword: profileForm.currentPassword || undefined,
+          newPassword: profileForm.newPassword || undefined
+        }),
+        credentials: 'include'
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        setProfileMessage({ text: 'Profile updated successfully!', type: 'success' });
+        await refreshUser();
+        setProfileForm(prev => ({ ...prev, currentPassword: '', newPassword: '', confirmNewPassword: '' }));
+      } else {
+        setProfileMessage({ text: data.error || 'Failed to update profile.', type: 'error' });
+      }
+    } catch (err: any) {
+      console.error('Profile update error:', err);
+      setProfileMessage({ text: err.message || 'Error updating profile.', type: 'error' });
+    } finally {
+      setIsUpdatingProfile(false);
+    }
+  };
 
   return (
-    <div className="flex min-h-[calc(100vh-64px)] bg-slate-100">
-      {/* Sidebar Navigation */}
-      <aside className="w-64 bg-slate-900 text-slate-300 border-r border-slate-800 shrink-0 hidden md:flex flex-col justify-between p-4">
-        <div className="space-y-6">
-          {/* User profile card */}
-          <div className="p-3 bg-slate-800/80 rounded-xl border border-slate-700/60 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-gradient-to-tr from-purple-600 to-indigo-500 text-white font-bold flex items-center justify-center text-sm shadow-sm">
-              {user?.name?.charAt(0) || 'U'}
+    <div className="flex h-[calc(100vh-4rem)] overflow-hidden bg-slate-100">
+      {/* Toast Notification Banner */}
+      {saveMessage && (
+        <div className={`fixed top-20 right-6 z-50 flex items-center gap-2.5 px-4 py-3 rounded-xl shadow-lg border text-xs font-bold transition-all animate-in slide-in-from-top-4 ${
+          saveMessage.type === 'success' ? 'bg-emerald-50 text-emerald-800 border-emerald-300' : 'bg-red-50 text-red-800 border-red-300'
+        }`}>
+          {saveMessage.type === 'success' ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" /> : <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />}
+          <span>{saveMessage.text}</span>
+          <button onClick={() => setSaveMessage(null)} className="ml-2 hover:opacity-75 cursor-pointer">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* AI REVIEW & APPLY SIDE-BY-SIDE MODAL */}
+      {aiReviewModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-purple-100 text-purple-700 flex items-center justify-center">
+                  <Sparkles className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">{aiReviewModal.title}</h3>
+                  <p className="text-[11px] text-slate-500">Compare original draft with Gemini ATS-optimized recommendation</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setAiReviewModal(prev => ({ ...prev, isOpen: false }))}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-md"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
-            <div className="truncate">
-              <div className="text-xs font-bold text-white truncate">{user?.name}</div>
-              <div className="text-[11px] text-purple-300 truncate">{user?.email}</div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Left Column: Original */}
+              <div className="space-y-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Original Content</span>
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-600 min-h-[140px] max-h-[220px] overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                  {aiReviewModal.originalText || '(Empty)'}
+                </div>
+              </div>
+
+              {/* Right Column: AI Suggestion */}
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-purple-700">AI Improved Suggestion</span>
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 bg-purple-100 text-purple-800 rounded">ATS Optimized</span>
+                </div>
+                <textarea
+                  value={aiReviewModal.suggestedText}
+                  onChange={(e) => setAiReviewModal(prev => ({ ...prev, suggestedText: e.target.value }))}
+                  className="w-full p-3.5 bg-purple-50/50 border border-purple-300 rounded-xl text-xs text-slate-900 min-h-[140px] max-h-[220px] overflow-y-auto outline-hidden focus:ring-2 focus:ring-purple-600 leading-relaxed resize-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end items-center gap-2.5 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setAiReviewModal(prev => ({ ...prev, isOpen: false }))}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                Discard
+              </button>
+              <button
+                type="button"
+                onClick={() => aiReviewModal.onApply(aiReviewModal.suggestedText)}
+                className="px-4 py-2 text-xs font-bold text-white bg-purple-600 hover:bg-purple-700 rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+              >
+                <Check className="w-4 h-4" />
+                <span>Apply to Resume</span>
+              </button>
             </div>
           </div>
+        </div>
+      )}
 
-          {/* Nav Items */}
+      {/* DEDICATED OFFSCREEN PDF EXPORT RENDER ELEMENT */}
+      <div style={{ position: 'fixed', left: '-9999px', top: 0, width: '210mm' }}>
+        <div id="dedicated-pdf-export-element">
+          {exportingResume && (
+            <ResumeRenderer
+              resume={exportingResume}
+              templateId={exportingResume.template_id || 'professional'}
+              isPrintMode={true}
+              elementId="dedicated-pdf-export-inner"
+            />
+          )}
+        </div>
+      </div>
+
+      {/* LEFT SIDEBAR NAVIGATION */}
+      <aside className="w-64 bg-slate-900 text-slate-300 flex flex-col justify-between p-4 shrink-0 border-r border-slate-800 hidden md:flex">
+        <div className="space-y-6">
+          {/* User Profile Mini Card in Sidebar */}
+          <button
+            onClick={() => setUserTab('profile')}
+            className="w-full p-3 rounded-2xl bg-slate-800/80 hover:bg-slate-800 border border-slate-700/60 flex items-center gap-3 transition-colors text-left cursor-pointer group"
+          >
+            <div className="w-10 h-10 rounded-xl bg-purple-600 text-white font-black text-sm flex items-center justify-center shrink-0 shadow-sm group-hover:scale-105 transition-transform">
+              {user?.name?.charAt(0).toUpperCase() || 'U'}
+            </div>
+            <div className="overflow-hidden">
+              <div className="font-bold text-xs text-white truncate">{user?.name}</div>
+              <div className="text-[11px] text-purple-300 truncate">{user?.email}</div>
+            </div>
+          </button>
+
+          {/* Primary Navigation Menu */}
           <nav className="space-y-1 text-xs font-semibold">
             <button
               onClick={() => setUserTab('dashboard')}
               className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
-                userTab === 'dashboard' ? 'bg-purple-600 text-white shadow-sm' : 'hover:bg-slate-800 hover:text-white'
+                userTab === 'dashboard' ? 'bg-purple-600 text-white shadow-sm font-bold' : 'hover:bg-slate-800 hover:text-white'
               }`}
             >
               <LayoutDashboard className="w-4 h-4" />
@@ -513,11 +886,13 @@ export const UserPortal: React.FC = () => {
 
             <button
               onClick={() => {
-                setCurrentResume(defaultResume);
+                const fresh = createNewBlankResume(user);
+                setCurrentResume(fresh);
+                setCurrentResumeId(null);
                 setUserTab('builder');
               }}
               className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
-                userTab === 'builder' ? 'bg-purple-600 text-white shadow-sm' : 'hover:bg-slate-800 hover:text-white'
+                userTab === 'builder' ? 'bg-purple-600 text-white shadow-sm font-bold' : 'hover:bg-slate-800 hover:text-white'
               }`}
             >
               <FilePlus className="w-4 h-4 text-purple-400" />
@@ -527,7 +902,7 @@ export const UserPortal: React.FC = () => {
             <button
               onClick={() => setUserTab('resumes')}
               className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
-                userTab === 'resumes' ? 'bg-purple-600 text-white shadow-sm' : 'hover:bg-slate-800 hover:text-white'
+                userTab === 'resumes' ? 'bg-purple-600 text-white shadow-sm font-bold' : 'hover:bg-slate-800 hover:text-white'
               }`}
             >
               <Files className="w-4 h-4" />
@@ -537,7 +912,7 @@ export const UserPortal: React.FC = () => {
             <button
               onClick={() => setUserTab('templates')}
               className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
-                userTab === 'templates' ? 'bg-purple-600 text-white shadow-sm' : 'hover:bg-slate-800 hover:text-white'
+                userTab === 'templates' ? 'bg-purple-600 text-white shadow-sm font-bold' : 'hover:bg-slate-800 hover:text-white'
               }`}
             >
               <Layers className="w-4 h-4" />
@@ -545,11 +920,10 @@ export const UserPortal: React.FC = () => {
             </button>
 
             <button
-              onClick={() => {
-                setUserTab('builder');
-                setBuilderTab('career');
-              }}
-              className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all cursor-pointer hover:bg-slate-800 hover:text-white text-purple-300"
+              onClick={() => setUserTab('ai-generator')}
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
+                userTab === 'ai-generator' ? 'bg-purple-600 text-white shadow-sm font-bold' : 'hover:bg-slate-800 hover:text-white text-purple-300'
+              }`}
             >
               <Sparkles className="w-4 h-4 text-purple-400" />
               <span>AI Resume Polish</span>
@@ -562,7 +936,7 @@ export const UserPortal: React.FC = () => {
             <button
               onClick={() => setUserTab('recommendations')}
               className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
-                userTab === 'recommendations' ? 'bg-purple-600 text-white shadow-sm' : 'hover:bg-slate-800 hover:text-white'
+                userTab === 'recommendations' ? 'bg-purple-600 text-white shadow-sm font-bold' : 'hover:bg-slate-800 hover:text-white'
               }`}
             >
               <Compass className="w-4 h-4 text-emerald-400" />
@@ -572,7 +946,7 @@ export const UserPortal: React.FC = () => {
             <button
               onClick={() => setUserTab('skill-gap')}
               className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
-                userTab === 'skill-gap' ? 'bg-purple-600 text-white shadow-sm' : 'hover:bg-slate-800 hover:text-white'
+                userTab === 'skill-gap' ? 'bg-purple-600 text-white shadow-sm font-bold' : 'hover:bg-slate-800 hover:text-white'
               }`}
             >
               <BarChart2 className="w-4 h-4 text-amber-400" />
@@ -582,11 +956,25 @@ export const UserPortal: React.FC = () => {
             <button
               onClick={() => setUserTab('roadmap')}
               className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
-                userTab === 'roadmap' ? 'bg-purple-600 text-white shadow-sm' : 'hover:bg-slate-800 hover:text-white'
+                userTab === 'roadmap' ? 'bg-purple-600 text-white shadow-sm font-bold' : 'hover:bg-slate-800 hover:text-white'
               }`}
             >
               <Route className="w-4 h-4 text-blue-400" />
               <span>Learning Roadmap</span>
+            </button>
+
+            <div className="pt-3 pb-1 border-t border-slate-800">
+              <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider px-3">Account</span>
+            </div>
+
+            <button
+              onClick={() => setUserTab('profile')}
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
+                userTab === 'profile' ? 'bg-purple-600 text-white shadow-sm font-bold' : 'hover:bg-slate-800 hover:text-white'
+              }`}
+            >
+              <UserIcon className="w-4 h-4 text-slate-400" />
+              <span>My Profile & Settings</span>
             </button>
           </nav>
         </div>
@@ -609,9 +997,9 @@ export const UserPortal: React.FC = () => {
         </div>
       </aside>
 
-      {/* Main Content Area */}
+      {/* MAIN CONTENT AREA */}
       <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
-        {/* TAB 1: DASHBOARD */}
+        {/* TAB 1: USER DASHBOARD */}
         {userTab === 'dashboard' && (
           <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-200">
             {/* Welcome Banner */}
@@ -632,7 +1020,9 @@ export const UserPortal: React.FC = () => {
               <div className="flex flex-wrap gap-3">
                 <button
                   onClick={() => {
-                    setCurrentResume(defaultResume);
+                    const fresh = createNewBlankResume(user);
+                    setCurrentResume(fresh);
+                    setCurrentResumeId(null);
                     setUserTab('builder');
                   }}
                   className="px-5 py-2.5 bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer"
@@ -649,52 +1039,34 @@ export const UserPortal: React.FC = () => {
               </div>
             </div>
 
-            {/* Metrics Row */}
+            {/* Quick Metrics */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-                <div className="flex items-center justify-between text-slate-500 text-xs font-semibold mb-2">
-                  <span>Resumes Created</span>
-                  <Files className="w-4 h-4 text-purple-600" />
-                </div>
-                <div className="text-3xl font-black text-slate-900">{resumes.length}</div>
-                <div className="text-[11px] text-emerald-600 font-medium mt-1">Ready for PDF download</div>
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-1">
+                <div className="text-xs font-semibold text-slate-500">Total Saved Resumes</div>
+                <div className="text-2xl font-black text-slate-900">{resumes.length}</div>
+                <div className="text-[11px] text-purple-600 font-medium">Ready for job export</div>
               </div>
 
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-                <div className="flex items-center justify-between text-slate-500 text-xs font-semibold mb-2">
-                  <span>Avg Completion</span>
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-1">
+                <div className="text-xs font-semibold text-slate-500">Active Resume Score</div>
+                <div className="text-2xl font-black text-emerald-600">
+                  {currentResume?.completion_percentage || 85}%
                 </div>
-                <div className="text-3xl font-black text-slate-900">
-                  {resumes.length ? Math.round(resumes.reduce((acc, r) => acc + (r.completion_percentage || 0), 0) / resumes.length) : 85}%
-                </div>
-                <div className="text-[11px] text-slate-500 mt-1">ATS Content Score</div>
+                <div className="text-[11px] text-emerald-700 font-medium">ATS Profile Completeness</div>
               </div>
 
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-                <div className="flex items-center justify-between text-slate-500 text-xs font-semibold mb-2">
-                  <span>Top Job Alignment</span>
-                  <Compass className="w-4 h-4 text-blue-600" />
-                </div>
-                <div className="text-xl font-bold text-slate-900 truncate">
-                  {recommendations[0]?.roleTitle || 'Full Stack Dev'}
-                </div>
-                <div className="text-[11px] text-blue-600 font-medium mt-1">
-                  {recommendations[0]?.matchPercentage || 92}% Match Score
-                </div>
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-1">
+                <div className="text-xs font-semibold text-slate-500">Available Templates</div>
+                <div className="text-2xl font-black text-indigo-600">8</div>
+                <div className="text-[11px] text-indigo-700 font-medium">1-Click Switchable</div>
               </div>
 
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-                <div className="flex items-center justify-between text-slate-500 text-xs font-semibold mb-2">
-                  <span>Skills in Progress</span>
-                  <BookOpen className="w-4 h-4 text-amber-600" />
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-1">
+                <div className="text-xs font-semibold text-slate-500">Skills Tracked</div>
+                <div className="text-2xl font-black text-purple-600">
+                  {skillProgressList.filter(s => s.status === 'Completed').length} / {skillProgressList.length || 12}
                 </div>
-                <div className="text-3xl font-black text-slate-900">
-                  {skillProgressList.filter(p => p.status === 'Learning').length || 2}
-                </div>
-                <div className="text-[11px] text-amber-600 font-medium mt-1">
-                  {skillProgressList.filter(p => p.status === 'Completed').length} mastered
-                </div>
+                <div className="text-[11px] text-slate-500 font-medium">Curriculum Milestones</div>
               </div>
             </div>
 
@@ -703,14 +1075,16 @@ export const UserPortal: React.FC = () => {
               <div className="flex justify-between items-center">
                 <div>
                   <h2 className="text-lg font-bold text-slate-900">Your Resumes</h2>
-                  <p className="text-xs text-slate-500">Edit, duplicate, preview, or export to PDF</p>
+                  <p className="text-xs text-slate-500">Edit, duplicate, download PDF, or switch styles instantly</p>
                 </div>
                 <button
                   onClick={() => {
-                    setCurrentResume(defaultResume);
+                    const fresh = createNewBlankResume(user);
+                    setCurrentResume(fresh);
+                    setCurrentResumeId(null);
                     setUserTab('builder');
                   }}
-                  className="px-3.5 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold text-xs rounded-lg transition-colors flex items-center gap-1.5"
+                  className="px-3.5 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold text-xs rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span>New Resume</span>
@@ -723,10 +1097,12 @@ export const UserPortal: React.FC = () => {
                   <p className="text-xs text-slate-500">No saved resumes found yet. Click below to craft your first resume!</p>
                   <button
                     onClick={() => {
-                      setCurrentResume(defaultResume);
+                      const fresh = createNewBlankResume(user);
+                      setCurrentResume(fresh);
+                      setCurrentResumeId(null);
                       setUserTab('builder');
                     }}
-                    className="px-4 py-2 bg-purple-600 text-white font-bold text-xs rounded-lg"
+                    className="px-4 py-2 bg-purple-600 text-white font-bold text-xs rounded-lg cursor-pointer"
                   >
                     Start Resume Builder
                   </button>
@@ -764,16 +1140,30 @@ export const UserPortal: React.FC = () => {
                           <Edit3 className="w-3.5 h-3.5" />
                           <span>Edit</span>
                         </button>
+
                         <button
-                          onClick={() => {
-                            setCurrentResume(r);
-                            setSelectedTemplate(r.template_id || 'professional');
-                            setTimeout(() => handleDownloadPdf(), 200);
-                          }}
+                          onClick={() => handleDuplicateResume(r.id)}
+                          title="Duplicate Resume"
+                          className="p-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg transition-colors cursor-pointer"
+                        >
+                          <Copy className="w-4 h-4" />
+                        </button>
+
+                        <button
+                          onClick={() => handleDownloadPdf(r)}
+                          disabled={isExportingPdf}
                           title="Download PDF"
                           className="p-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg transition-colors cursor-pointer"
                         >
                           <Download className="w-4 h-4" />
+                        </button>
+
+                        <button
+                          onClick={() => handleDeleteResume(r.id)}
+                          title="Delete Resume"
+                          className="p-1.5 bg-white hover:bg-red-50 text-slate-400 hover:text-red-600 border border-slate-300 rounded-lg transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
                     </div>
@@ -811,28 +1201,44 @@ export const UserPortal: React.FC = () => {
                   type="text"
                   value={currentResume.title}
                   onChange={(e) => setCurrentResume({ ...currentResume, title: e.target.value })}
+                  placeholder="Resume Title..."
                   className="font-bold text-base text-slate-900 bg-transparent border-b border-transparent hover:border-slate-300 focus:border-purple-600 outline-hidden px-1 py-0.5"
                 />
                 <span className="text-xs px-2.5 py-1 rounded-full bg-purple-50 text-purple-700 font-bold border border-purple-200">
                   {currentResume.completion_percentage || 85}% complete
                 </span>
+                {currentResume.id > 0 ? (
+                  <span className="text-[10px] text-slate-400 font-mono">ID #{currentResume.id}</span>
+                ) : (
+                  <span className="text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded font-bold">Unsaved Draft</span>
+                )}
               </div>
 
-              {/* Template selector dropdown */}
+              {/* Toolbar Controls */}
               <div className="flex items-center gap-2">
-                <label className="text-xs font-semibold text-slate-600 hidden sm:block">Template:</label>
-                <select
-                  value={selectedTemplate}
-                  onChange={(e) => {
-                    setSelectedTemplate(e.target.value);
-                    setCurrentResume({ ...currentResume, template_id: e.target.value });
-                  }}
-                  className="text-xs font-semibold border border-slate-300 rounded-lg px-3 py-1.5 bg-white text-slate-800 outline-hidden focus:ring-2 focus:ring-purple-500 cursor-pointer"
+                <button
+                  onClick={loadStarterTemplateData}
+                  title="Fills demo info for fast testing"
+                  className="px-3 py-1.5 text-xs font-semibold text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded-lg transition-colors cursor-pointer"
                 >
-                  {templates.map(t => (
-                    <option key={t.id} value={t.id}>{t.name}</option>
-                  ))}
-                </select>
+                  Load Demo Data
+                </button>
+
+                <div className="flex items-center gap-1.5 border-l border-slate-200 pl-2">
+                  <label className="text-xs font-semibold text-slate-600 hidden sm:block">Template:</label>
+                  <select
+                    value={selectedTemplate}
+                    onChange={(e) => {
+                      setSelectedTemplate(e.target.value);
+                      setCurrentResume({ ...currentResume, template_id: e.target.value });
+                    }}
+                    className="text-xs font-semibold border border-slate-300 rounded-lg px-3 py-1.5 bg-white text-slate-800 outline-hidden focus:ring-2 focus:ring-purple-500 cursor-pointer"
+                  >
+                    {templates.map(t => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                </div>
 
                 <button
                   onClick={handleSaveResume}
@@ -844,16 +1250,17 @@ export const UserPortal: React.FC = () => {
                 </button>
 
                 <button
-                  onClick={handleDownloadPdf}
-                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-lg transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  onClick={() => handleDownloadPdf()}
+                  disabled={isExportingPdf}
+                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-lg transition-all flex items-center gap-1.5 shadow-xs cursor-pointer disabled:opacity-50"
                 >
-                  <Download className="w-3.5 h-3.5" />
+                  {isExportingPdf ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
                   <span>Download PDF</span>
                 </button>
 
                 <button
                   onClick={() => window.print()}
-                  className="p-2 border border-slate-300 text-slate-700 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer"
+                  className="p-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg transition-colors cursor-pointer"
                   title="Print Resume"
                 >
                   <Printer className="w-4 h-4" />
@@ -861,22 +1268,15 @@ export const UserPortal: React.FC = () => {
               </div>
             </div>
 
-            {saveMessage && (
-              <div className="p-3 bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-medium rounded-xl flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                <span>{saveMessage}</span>
-              </div>
-            )}
-
-            {/* Split Screen Workspace: Left Form, Right Live Preview */}
+            {/* Split Screen Layout: Left Form Builder, Right Live Preview */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-              {/* LEFT COLUMN: BUILDER TABS & FORM */}
+              {/* LEFT COLUMN: MULTI-SECTION FORM EDITOR */}
               <div className="lg:col-span-6 bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-                {/* Form Navigation Tabs */}
-                <div className="flex overflow-x-auto p-1.5 bg-slate-50 border-b border-slate-200 gap-1 text-xs font-semibold text-slate-600 scrollbar-none">
+                {/* Section Navigation Tabs */}
+                <div className="flex border-b border-slate-200 overflow-x-auto bg-slate-50/70 p-1.5 gap-1 text-xs font-semibold">
                   {[
-                    { id: 'personal', label: 'Personal' },
-                    { id: 'career', label: 'Career & Summary' },
+                    { id: 'personal', label: 'Personal Info' },
+                    { id: 'career', label: 'Summary & Goal' },
                     { id: 'education', label: 'Education' },
                     { id: 'skills', label: 'Skills' },
                     { id: 'projects', label: 'Projects' },
@@ -886,10 +1286,10 @@ export const UserPortal: React.FC = () => {
                     <button
                       key={tab.id}
                       onClick={() => setBuilderTab(tab.id as any)}
-                      className={`px-3 py-1.5 rounded-lg whitespace-nowrap transition-all cursor-pointer ${
+                      className={`px-3 py-2 rounded-lg whitespace-nowrap transition-colors cursor-pointer ${
                         builderTab === tab.id
-                          ? 'bg-purple-600 text-white shadow-xs'
-                          : 'hover:text-slate-900 hover:bg-slate-200/60'
+                          ? 'bg-white text-purple-700 shadow-xs border border-slate-200 font-bold'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                       }`}
                     >
                       {tab.label}
@@ -897,16 +1297,15 @@ export const UserPortal: React.FC = () => {
                   ))}
                 </div>
 
-                <div className="p-6 space-y-5 max-h-[780px] overflow-y-auto">
-                  {/* SECTION 1: PERSONAL DETAILS */}
+                <div className="p-6 space-y-5">
+                  {/* SECTION 1: PERSONAL INFORMATION */}
                   {builderTab === 'personal' && (
                     <div className="space-y-4">
-                      <h3 className="font-bold text-sm text-slate-900 border-b border-slate-100 pb-2">
-                        Personal Contact Details
-                      </h3>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs">
+                      <h3 className="font-bold text-sm text-slate-900">Personal & Contact Details</h3>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
                         <div>
-                          <label className="block font-semibold text-slate-700 mb-1">Full Name *</label>
+                          <label className="block font-semibold text-slate-700 mb-1">Full Name</label>
                           <input
                             type="text"
                             value={currentResume.personal_info?.fullName || ''}
@@ -914,26 +1313,24 @@ export const UserPortal: React.FC = () => {
                               ...currentResume,
                               personal_info: { ...currentResume.personal_info, fullName: e.target.value }
                             })}
-                            className="w-full p-2 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
+                            placeholder="John Doe"
+                            className="w-full p-2.5 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
                           />
                         </div>
 
                         <div>
-                          <label className="block font-semibold text-slate-700 mb-1">Target Job Role *</label>
+                          <label className="block font-semibold text-slate-700 mb-1">Target Job Role</label>
                           <input
                             type="text"
                             value={currentResume.target_job_role || ''}
-                            onChange={(e) => setCurrentResume({
-                              ...currentResume,
-                              target_job_role: e.target.value
-                            })}
+                            onChange={(e) => setCurrentResume({ ...currentResume, target_job_role: e.target.value })}
                             placeholder="e.g. Full Stack Developer"
-                            className="w-full p-2 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
+                            className="w-full p-2.5 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
                           />
                         </div>
 
                         <div>
-                          <label className="block font-semibold text-slate-700 mb-1">Email Address *</label>
+                          <label className="block font-semibold text-slate-700 mb-1">Email Address</label>
                           <input
                             type="email"
                             value={currentResume.personal_info?.email || ''}
@@ -941,7 +1338,8 @@ export const UserPortal: React.FC = () => {
                               ...currentResume,
                               personal_info: { ...currentResume.personal_info, email: e.target.value }
                             })}
-                            className="w-full p-2 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
+                            placeholder="john@example.com"
+                            className="w-full p-2.5 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
                           />
                         </div>
 
@@ -954,12 +1352,13 @@ export const UserPortal: React.FC = () => {
                               ...currentResume,
                               personal_info: { ...currentResume.personal_info, phone: e.target.value }
                             })}
-                            className="w-full p-2 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
+                            placeholder="+1 (555) 000-0000"
+                            className="w-full p-2.5 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
                           />
                         </div>
 
-                        <div>
-                          <label className="block font-semibold text-slate-700 mb-1">Location (City, Country)</label>
+                        <div className="sm:col-span-2">
+                          <label className="block font-semibold text-slate-700 mb-1">City, State / Location</label>
                           <input
                             type="text"
                             value={currentResume.personal_info?.location || ''}
@@ -967,7 +1366,8 @@ export const UserPortal: React.FC = () => {
                               ...currentResume,
                               personal_info: { ...currentResume.personal_info, location: e.target.value }
                             })}
-                            className="w-full p-2 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
+                            placeholder="San Francisco, CA"
+                            className="w-full p-2.5 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
                           />
                         </div>
 
@@ -981,12 +1381,12 @@ export const UserPortal: React.FC = () => {
                               personal_info: { ...currentResume.personal_info, linkedin: e.target.value }
                             })}
                             placeholder="linkedin.com/in/username"
-                            className="w-full p-2 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
+                            className="w-full p-2.5 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
                           />
                         </div>
 
                         <div>
-                          <label className="block font-semibold text-slate-700 mb-1">GitHub Profile</label>
+                          <label className="block font-semibold text-slate-700 mb-1">GitHub / Portfolio Link</label>
                           <input
                             type="text"
                             value={currentResume.personal_info?.github || ''}
@@ -995,62 +1395,53 @@ export const UserPortal: React.FC = () => {
                               personal_info: { ...currentResume.personal_info, github: e.target.value }
                             })}
                             placeholder="github.com/username"
-                            className="w-full p-2 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block font-semibold text-slate-700 mb-1">Portfolio Website</label>
-                          <input
-                            type="text"
-                            value={currentResume.personal_info?.portfolio || ''}
-                            onChange={(e) => setCurrentResume({
-                              ...currentResume,
-                              personal_info: { ...currentResume.personal_info, portfolio: e.target.value }
-                            })}
-                            placeholder="yourname.dev"
-                            className="w-full p-2 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
+                            className="w-full p-2.5 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
                           />
                         </div>
                       </div>
                     </div>
                   )}
 
-                  {/* SECTION 2: CAREER & SUMMARY */}
+                  {/* SECTION 2: CAREER SUMMARY & OBJECTIVE */}
                   {builderTab === 'career' && (
                     <div className="space-y-5">
-                      <div>
-                        <div className="flex justify-between items-center mb-1.5">
+                      {/* Professional Summary */}
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
                           <label className="font-bold text-xs text-slate-900">Professional Summary</label>
                           <button
                             type="button"
-                            onClick={handleAiGenerateSummary}
+                            onClick={() => handleAiGenerateSummary('impact')}
                             disabled={isAiLoading}
-                            className="inline-flex items-center gap-1.5 px-3 py-1 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-lg text-xs font-bold transition-colors cursor-pointer"
+                            className="text-xs font-bold text-purple-700 hover:text-purple-900 inline-flex items-center gap-1.5 px-2.5 py-1 bg-purple-50 hover:bg-purple-100 rounded-md transition-colors cursor-pointer disabled:opacity-50"
                           >
                             {isAiLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 text-purple-600" />}
                             <span>AI Generate & Polish</span>
                           </button>
                         </div>
                         <textarea
-                          rows={5}
+                          rows={4}
                           value={currentResume.career_summary || ''}
                           onChange={(e) => setCurrentResume({ ...currentResume, career_summary: e.target.value })}
-                          placeholder="Results-driven software engineer with demonstrated expertise..."
-                          className="w-full p-3 text-xs border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500 leading-relaxed"
+                          placeholder="Experienced software engineer with expertise in..."
+                          className="w-full p-3 border border-slate-300 rounded-xl text-xs outline-hidden focus:ring-2 focus:ring-purple-500 leading-relaxed"
                         />
+                        <p className="text-[11px] text-slate-400">
+                          Tip: Click "AI Generate & Polish" to review suggestions before applying.
+                        </p>
                       </div>
 
-                      <div>
-                        <div className="flex justify-between items-center mb-1.5">
-                          <label className="font-bold text-xs text-slate-900">Career Objective (Especially for Freshers / Students)</label>
+                      {/* Career Objective */}
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <label className="font-bold text-xs text-slate-900">Career Objective (Freshers / Career Switch)</label>
                           <button
                             type="button"
                             onClick={handleAiGenerateObjective}
                             disabled={isAiLoading}
-                            className="inline-flex items-center gap-1.5 px-3 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold transition-colors cursor-pointer"
+                            className="text-xs font-bold text-purple-700 hover:text-purple-900 inline-flex items-center gap-1.5 px-2.5 py-1 bg-purple-50 hover:bg-purple-100 rounded-md transition-colors cursor-pointer disabled:opacity-50"
                           >
-                            <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                            {isAiLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 text-purple-600" />}
                             <span>AI Generate Objective</span>
                           </button>
                         </div>
@@ -1058,8 +1449,8 @@ export const UserPortal: React.FC = () => {
                           rows={3}
                           value={currentResume.career_objective || ''}
                           onChange={(e) => setCurrentResume({ ...currentResume, career_objective: e.target.value })}
-                          placeholder="Aspiring software professional seeking to leverage skills..."
-                          className="w-full p-3 text-xs border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500 leading-relaxed"
+                          placeholder="To obtain a challenging position as..."
+                          className="w-full p-3 border border-slate-300 rounded-xl text-xs outline-hidden focus:ring-2 focus:ring-purple-500 leading-relaxed"
                         />
                       </div>
                     </div>
@@ -1073,13 +1464,7 @@ export const UserPortal: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => {
-                            const newEdu = {
-                              institution: '',
-                              degree: 'Bachelor of Science',
-                              branch: 'Computer Science',
-                              graduationYear: '2024',
-                              cgpa: ''
-                            };
+                            const newEdu = { institution: '', degree: 'Bachelor of Science', branch: 'Computer Science', graduationYear: '2024', cgpa: '' };
                             setCurrentResume({
                               ...currentResume,
                               education: [...(currentResume.education || []), newEdu]
@@ -1088,64 +1473,57 @@ export const UserPortal: React.FC = () => {
                           className="px-2.5 py-1 bg-purple-50 text-purple-700 border border-purple-200 rounded-md text-xs font-bold hover:bg-purple-100 flex items-center gap-1 cursor-pointer"
                         >
                           <Plus className="w-3.5 h-3.5" />
-                          <span>Add Degree</span>
+                          <span>Add Education</span>
                         </button>
                       </div>
 
-                      {currentResume.education?.map((edu, idx) => (
-                        <div key={idx} className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-3 relative">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const updated = currentResume.education?.filter((_, i) => i !== idx);
-                              setCurrentResume({ ...currentResume, education: updated });
-                            }}
-                            className="absolute top-3 right-3 text-slate-400 hover:text-red-500 cursor-pointer"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                      {currentResume.education?.length === 0 ? (
+                        <p className="text-xs text-slate-400 italic">No education entries added yet.</p>
+                      ) : (
+                        currentResume.education?.map((edu, idx) => (
+                          <div key={idx} className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-3 relative">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const updated = currentResume.education?.filter((_, i) => i !== idx);
+                                setCurrentResume({ ...currentResume, education: updated });
+                              }}
+                              className="absolute top-3 right-3 text-slate-400 hover:text-red-500 cursor-pointer"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
 
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                            <div>
-                              <label className="block font-semibold text-slate-700 mb-1">Institution Name</label>
-                              <input
-                                type="text"
-                                value={edu.institution}
-                                onChange={(e) => {
-                                  const updated = [...(currentResume.education || [])];
-                                  updated[idx].institution = e.target.value;
-                                  setCurrentResume({ ...currentResume, education: updated });
-                                }}
-                                className="w-full p-2 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
-                              />
-                            </div>
-                            <div>
-                              <label className="block font-semibold text-slate-700 mb-1">Degree</label>
-                              <input
-                                type="text"
-                                value={edu.degree}
-                                onChange={(e) => {
-                                  const updated = [...(currentResume.education || [])];
-                                  updated[idx].degree = e.target.value;
-                                  setCurrentResume({ ...currentResume, education: updated });
-                                }}
-                                className="w-full p-2 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
-                              />
-                            </div>
-                            <div>
-                              <label className="block font-semibold text-slate-700 mb-1">Branch / Major</label>
-                              <input
-                                type="text"
-                                value={edu.branch}
-                                onChange={(e) => {
-                                  const updated = [...(currentResume.education || [])];
-                                  updated[idx].branch = e.target.value;
-                                  setCurrentResume({ ...currentResume, education: updated });
-                                }}
-                                className="w-full p-2 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
-                              />
-                            </div>
-                            <div className="grid grid-cols-2 gap-2">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                              <div className="sm:col-span-2">
+                                <label className="block font-semibold text-slate-700 mb-1">Institution / University</label>
+                                <input
+                                  type="text"
+                                  value={edu.institution}
+                                  onChange={(e) => {
+                                    const updated = [...(currentResume.education || [])];
+                                    updated[idx].institution = e.target.value;
+                                    setCurrentResume({ ...currentResume, education: updated });
+                                  }}
+                                  placeholder="e.g. UC Berkeley"
+                                  className="w-full p-2 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="block font-semibold text-slate-700 mb-1">Degree</label>
+                                <input
+                                  type="text"
+                                  value={edu.degree}
+                                  onChange={(e) => {
+                                    const updated = [...(currentResume.education || [])];
+                                    updated[idx].degree = e.target.value;
+                                    setCurrentResume({ ...currentResume, education: updated });
+                                  }}
+                                  placeholder="B.S. in Computer Science"
+                                  className="w-full p-2 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
+                                />
+                              </div>
+
                               <div>
                                 <label className="block font-semibold text-slate-700 mb-1">Graduation Year</label>
                                 <input
@@ -1156,11 +1534,28 @@ export const UserPortal: React.FC = () => {
                                     updated[idx].graduationYear = e.target.value;
                                     setCurrentResume({ ...currentResume, education: updated });
                                   }}
+                                  placeholder="2024"
                                   className="w-full p-2 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
                                 />
                               </div>
+
                               <div>
-                                <label className="block font-semibold text-slate-700 mb-1">CGPA / %</label>
+                                <label className="block font-semibold text-slate-700 mb-1">Branch / Major</label>
+                                <input
+                                  type="text"
+                                  value={edu.branch}
+                                  onChange={(e) => {
+                                    const updated = [...(currentResume.education || [])];
+                                    updated[idx].branch = e.target.value;
+                                    setCurrentResume({ ...currentResume, education: updated });
+                                  }}
+                                  placeholder="Software Engineering"
+                                  className="w-full p-2 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="block font-semibold text-slate-700 mb-1">GPA / Percentage</label>
                                 <input
                                   type="text"
                                   value={edu.cgpa}
@@ -1169,156 +1564,108 @@ export const UserPortal: React.FC = () => {
                                     updated[idx].cgpa = e.target.value;
                                     setCurrentResume({ ...currentResume, education: updated });
                                   }}
-                                  placeholder="e.g. 3.8 / 4.0"
+                                  placeholder="3.8 / 4.0"
                                   className="w-full p-2 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
                                 />
                               </div>
                             </div>
                           </div>
-                        </div>
-                      ))}
+                        ))
+                      )}
                     </div>
                   )}
 
                   {/* SECTION 4: SKILLS */}
                   {builderTab === 'skills' && (
                     <div className="space-y-4">
-                      <div className="flex justify-between items-center">
-                        <h3 className="font-bold text-sm text-slate-900">Technical & Professional Skills</h3>
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            setIsAiLoading(true);
-                            try {
-                              const res = await fetch('/api/ai/suggest-skills', {
-                                method: 'POST',
-                                headers: {
-                                  'Content-Type': 'application/json',
-                                  ...(token ? { Authorization: `Bearer ${token}` } : {})
-                                },
-                                body: JSON.stringify({
-                                  targetJobRole: currentResume.target_job_role || 'Full Stack Developer',
-                                  currentSkills: currentResume.skills?.programmingLanguages
-                                }),
-                                credentials: 'include'
-                              });
-                              if (res.ok) {
-                                const data = await res.json();
-                                if (data.suggestedSkills) {
-                                  const existingTools = currentResume.skills?.tools || [];
-                                  const combined = Array.from(new Set([...existingTools, ...data.suggestedSkills.slice(0, 4)]));
-                                  setCurrentResume({
-                                    ...currentResume,
-                                    skills: { ...currentResume.skills, tools: combined }
-                                  });
-                                }
-                              }
-                            } catch (e) {
-                              console.error(e);
-                            } finally {
-                              setIsAiLoading(false);
-                            }
-                          }}
-                          className="px-2.5 py-1 bg-purple-50 text-purple-700 border border-purple-200 rounded-md text-xs font-bold hover:bg-purple-100 flex items-center gap-1 cursor-pointer"
-                        >
-                          <Sparkles className="w-3.5 h-3.5 text-purple-600" />
-                          <span>Suggest ATS Keywords</span>
-                        </button>
-                      </div>
+                      <h3 className="font-bold text-sm text-slate-900">Categorized Skills</h3>
+                      <p className="text-xs text-slate-500">
+                        Separate skills by commas. Skills automatically synchronize with our MySQL job recommendation engine.
+                      </p>
 
                       <div className="space-y-3 text-xs">
                         <div>
-                          <label className="block font-semibold text-slate-700 mb-1">
-                            Programming Languages (comma separated)
-                          </label>
+                          <label className="block font-semibold text-slate-700 mb-1">Programming Languages</label>
                           <input
                             type="text"
                             value={(currentResume.skills?.programmingLanguages || []).join(', ')}
-                            onChange={(e) => setCurrentResume({
-                              ...currentResume,
-                              skills: {
-                                ...currentResume.skills,
-                                programmingLanguages: e.target.value.split(',').map(s => s.trim()).filter(Boolean)
-                              }
-                            })}
-                            placeholder="e.g. JavaScript, TypeScript, Python, Java, SQL"
-                            className="w-full p-2 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
+                            onChange={(e) => {
+                              const items = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
+                              setCurrentResume({
+                                ...currentResume,
+                                skills: { ...currentResume.skills, programmingLanguages: items }
+                              });
+                            }}
+                            placeholder="JavaScript, TypeScript, Python, Java, SQL"
+                            className="w-full p-2.5 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
                           />
                         </div>
 
                         <div>
-                          <label className="block font-semibold text-slate-700 mb-1">
-                            Frameworks & Libraries (comma separated)
-                          </label>
+                          <label className="block font-semibold text-slate-700 mb-1">Frameworks & Libraries</label>
                           <input
                             type="text"
                             value={(currentResume.skills?.frameworks || []).join(', ')}
-                            onChange={(e) => setCurrentResume({
-                              ...currentResume,
-                              skills: {
-                                ...currentResume.skills,
-                                frameworks: e.target.value.split(',').map(s => s.trim()).filter(Boolean)
-                              }
-                            })}
-                            placeholder="e.g. React.js, Node.js, Express.js, Spring Boot, Tailwind CSS"
-                            className="w-full p-2 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
+                            onChange={(e) => {
+                              const items = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
+                              setCurrentResume({
+                                ...currentResume,
+                                skills: { ...currentResume.skills, frameworks: items }
+                              });
+                            }}
+                            placeholder="React.js, Node.js, Express.js, Tailwind CSS, Spring Boot"
+                            className="w-full p-2.5 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
                           />
                         </div>
 
                         <div>
-                          <label className="block font-semibold text-slate-700 mb-1">
-                            Databases & Caching (comma separated)
-                          </label>
+                          <label className="block font-semibold text-slate-700 mb-1">Databases & Storage</label>
                           <input
                             type="text"
                             value={(currentResume.skills?.databases || []).join(', ')}
-                            onChange={(e) => setCurrentResume({
-                              ...currentResume,
-                              skills: {
-                                ...currentResume.skills,
-                                databases: e.target.value.split(',').map(s => s.trim()).filter(Boolean)
-                              }
-                            })}
-                            placeholder="e.g. PostgreSQL, MySQL, MongoDB, Redis"
-                            className="w-full p-2 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
+                            onChange={(e) => {
+                              const items = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
+                              setCurrentResume({
+                                ...currentResume,
+                                skills: { ...currentResume.skills, databases: items }
+                              });
+                            }}
+                            placeholder="PostgreSQL, MySQL, MongoDB, Redis"
+                            className="w-full p-2.5 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
                           />
                         </div>
 
                         <div>
-                          <label className="block font-semibold text-slate-700 mb-1">
-                            Developer Tools & Cloud (comma separated)
-                          </label>
+                          <label className="block font-semibold text-slate-700 mb-1">Tools & DevOps</label>
                           <input
                             type="text"
                             value={(currentResume.skills?.tools || []).join(', ')}
-                            onChange={(e) => setCurrentResume({
-                              ...currentResume,
-                              skills: {
-                                ...currentResume.skills,
-                                tools: e.target.value.split(',').map(s => s.trim()).filter(Boolean)
-                              }
-                            })}
-                            placeholder="e.g. Git, GitHub, Docker, Kubernetes, AWS, Linux"
-                            className="w-full p-2 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
+                            onChange={(e) => {
+                              const items = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
+                              setCurrentResume({
+                                ...currentResume,
+                                skills: { ...currentResume.skills, tools: items }
+                              });
+                            }}
+                            placeholder="Git, Docker, Kubernetes, AWS, Linux"
+                            className="w-full p-2.5 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
                           />
                         </div>
 
                         <div>
-                          <label className="block font-semibold text-slate-700 mb-1">
-                            Soft Skills & Leadership (comma separated)
-                          </label>
+                          <label className="block font-semibold text-slate-700 mb-1">Core Concepts & Technical Skills</label>
                           <input
                             type="text"
-                            value={(currentResume.skills?.softSkills || []).join(', ')}
-                            onChange={(e) => setCurrentResume({
-                              ...currentResume,
-                              skills: {
-                                ...currentResume.skills,
-                                softSkills: e.target.value.split(',').map(s => s.trim()).filter(Boolean)
-                              }
-                            })}
-                            placeholder="e.g. Problem Solving, Cross-functional Collaboration, Agile / Scrum"
-                            className="w-full p-2 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
+                            value={(currentResume.skills?.technicalSkills || []).join(', ')}
+                            onChange={(e) => {
+                              const items = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
+                              setCurrentResume({
+                                ...currentResume,
+                                skills: { ...currentResume.skills, technicalSkills: items }
+                              });
+                            }}
+                            placeholder="RESTful APIs, Microservices, Data Structures, WebSockets"
+                            className="w-full p-2.5 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
                           />
                         </div>
                       </div>
@@ -1329,13 +1676,13 @@ export const UserPortal: React.FC = () => {
                   {builderTab === 'projects' && (
                     <div className="space-y-4">
                       <div className="flex justify-between items-center">
-                        <h3 className="font-bold text-sm text-slate-900">Featured Projects</h3>
+                        <h3 className="font-bold text-sm text-slate-900">Featured Technical Projects</h3>
                         <button
                           type="button"
                           onClick={() => {
                             const newProj = {
                               title: 'New Technical Project',
-                              description: 'Architected and built full-stack solution utilizing modern component architecture.',
+                              description: 'Architected and developed full-stack solution utilizing modern component architecture.',
                               technologies: 'React, Node.js, SQL',
                               link: 'https://github.com/developer/project',
                               responsibilities: 'Implemented core REST API and user interface.'
@@ -1448,9 +1795,9 @@ export const UserPortal: React.FC = () => {
                             const newExp = {
                               company: 'Company Name',
                               jobTitle: 'Software Engineer',
-                              duration: 'Jan 2023 - Present',
-                              responsibilities: 'Engineered web applications and collaborated with product teams.',
-                              achievements: 'Improved test coverage and delivery cycles.'
+                              duration: '2023 - Present',
+                              responsibilities: 'Developed core application features and collaborated across agile sprints.',
+                              achievements: 'Enhanced query throughput and reliability.'
                             };
                             setCurrentResume({
                               ...currentResume,
@@ -1650,33 +1997,49 @@ export const UserPortal: React.FC = () => {
                     Live Document Preview
                   </span>
                   <div className="flex items-center gap-2">
-                    <span className="text-slate-500">Template:</span>
-                    <span className="font-bold text-slate-900 capitalize">{selectedTemplate.replace('_', ' ')}</span>
+                    <button
+                      onClick={() => setActivePreviewZoom(Math.max(70, activePreviewZoom - 10))}
+                      className="px-2 py-0.5 bg-white rounded border border-slate-300 text-[11px] font-bold"
+                    >
+                      -
+                    </button>
+                    <span className="text-[11px] font-mono">{activePreviewZoom}%</span>
+                    <button
+                      onClick={() => setActivePreviewZoom(Math.min(130, activePreviewZoom + 10))}
+                      className="px-2 py-0.5 bg-white rounded border border-slate-300 text-[11px] font-bold"
+                    >
+                      +
+                    </button>
                   </div>
                 </div>
 
-                <div className="overflow-x-auto max-h-[820px] rounded-xl border border-slate-300 bg-slate-300/40 p-4 shadow-inner">
-                  <ResumeRenderer
-                    resume={currentResume}
-                    templateId={selectedTemplate}
-                  />
+                <div className="overflow-x-auto p-4 bg-slate-300/40 rounded-2xl border border-slate-200 flex justify-center">
+                  <div style={{ transform: `scale(${activePreviewZoom / 100})`, transformOrigin: 'top center', transition: 'transform 0.15s ease' }}>
+                    <ResumeRenderer
+                      resume={currentResume}
+                      templateId={selectedTemplate}
+                      elementId="resume-preview-document"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
           </div>
         )}
 
-        {/* TAB 3: MY RESUMES LIST */}
+        {/* TAB 3: MY RESUMES (LIST & ACTIONS) */}
         {userTab === 'resumes' && (
           <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in duration-200">
-            <div className="flex justify-between items-center">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
-                <h1 className="text-2xl font-black text-slate-900 tracking-tight">My Resumes</h1>
-                <p className="text-xs text-slate-500">Manage all saved versions, switch templates, or export to PDF</p>
+                <h1 className="text-2xl font-black text-slate-900 tracking-tight">My Resumes ({resumes.length})</h1>
+                <p className="text-xs text-slate-500">Manage all saved versions, switch templates, duplicate, or export to PDF</p>
               </div>
               <button
                 onClick={() => {
-                  setCurrentResume(defaultResume);
+                  const fresh = createNewBlankResume(user);
+                  setCurrentResume(fresh);
+                  setCurrentResumeId(null);
                   setUserTab('builder');
                 }}
                 className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
@@ -1725,27 +2088,24 @@ export const UserPortal: React.FC = () => {
                     </button>
 
                     <button
-                      onClick={() => {
-                        setCurrentResume(r);
-                        setSelectedTemplate(r.template_id || 'professional');
-                        setTimeout(() => handleDownloadPdf(), 200);
-                      }}
-                      title="Download PDF"
+                      onClick={() => handleDuplicateResume(r.id)}
+                      title="Duplicate Resume"
                       className="p-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg transition-colors cursor-pointer"
+                    >
+                      <Copy className="w-4 h-4" />
+                    </button>
+
+                    <button
+                      onClick={() => handleDownloadPdf(r)}
+                      disabled={isExportingPdf}
+                      title="Download PDF"
+                      className="p-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
                     >
                       <Download className="w-4 h-4" />
                     </button>
 
                     <button
-                      onClick={async () => {
-                        if (!confirm('Are you sure you want to delete this resume?')) return;
-                        await fetch(`/api/resumes/${r.id}`, {
-                          method: 'DELETE',
-                          headers: token ? { Authorization: `Bearer ${token}` } : {},
-                          credentials: 'include'
-                        });
-                        fetchResumes();
-                      }}
+                      onClick={() => handleDeleteResume(r.id)}
                       title="Delete Resume"
                       className="p-2 bg-white hover:bg-red-50 text-slate-400 hover:text-red-600 border border-slate-300 rounded-lg transition-colors cursor-pointer"
                     >
@@ -1776,7 +2136,7 @@ export const UserPortal: React.FC = () => {
                       {tpl.id}
                     </span>
                     <h3 className="font-bold text-sm text-slate-900 mt-2">{tpl.name}</h3>
-                    <p className="text-xs text-slate-500 mt-1">{tpl.desc}</p>
+                    <p className="text-xs text-slate-500 mt-1 leading-relaxed">{tpl.desc}</p>
                   </div>
 
                   <button
@@ -1797,7 +2157,213 @@ export const UserPortal: React.FC = () => {
           </div>
         )}
 
-        {/* TAB 5: JOB RECOMMENDATIONS (CRITICAL FEATURE - REAL MYSQL DATA) */}
+        {/* TAB 5: DEDICATED AI RESUME POLISH WORKBENCH */}
+        {userTab === 'ai-generator' && currentResume && (
+          <div className="max-w-5xl mx-auto space-y-6 animate-in fade-in duration-200">
+            <div className="bg-gradient-to-r from-purple-900 via-indigo-900 to-slate-900 text-white p-6 sm:p-8 rounded-3xl shadow-lg space-y-3">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-500/20 text-purple-300 text-xs font-bold border border-purple-500/30">
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Google Gemini 3.8 Flash Engine</span>
+              </div>
+              <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">AI Resume Polish & Optimizer</h1>
+              <p className="text-xs sm:text-sm text-purple-200 max-w-2xl leading-relaxed">
+                Enhance your resume sections with strong action verbs, quantifiable metrics, and high-impact ATS keywords. All suggestions are presented side-by-side for your review before applying.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Polish Controls */}
+              <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-5 shadow-xs">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">Target Resume</label>
+                  <select
+                    value={currentResume.id}
+                    onChange={(e) => {
+                      const id = parseInt(e.target.value, 10);
+                      const found = resumes.find(r => r.id === id);
+                      if (found) {
+                        setCurrentResume(found);
+                        setCurrentResumeId(found.id);
+                      }
+                    }}
+                    className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-800 outline-hidden focus:ring-2 focus:ring-purple-500"
+                  >
+                    {resumes.map(r => (
+                      <option key={r.id} value={r.id}>{r.title}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">Section to Polish</label>
+                  <div className="space-y-1.5">
+                    {[
+                      { id: 'summary', label: 'Professional Summary' },
+                      { id: 'objective', label: 'Career Objective' },
+                      { id: 'experience', label: 'Work Experience' },
+                      { id: 'projects', label: 'Technical Projects' }
+                    ].map(sec => (
+                      <button
+                        key={sec.id}
+                        onClick={() => setAiPolishSection(sec.id as any)}
+                        className={`w-full text-left px-3 py-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
+                          aiPolishSection === sec.id ? 'bg-purple-50 text-purple-800 border border-purple-200 font-bold' : 'hover:bg-slate-50 text-slate-700'
+                        }`}
+                      >
+                        {sec.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">Enhancement Tone</label>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    {[
+                      { id: 'impact', label: 'Action & Impact' },
+                      { id: 'executive', label: 'Executive' },
+                      { id: 'ats', label: 'ATS Keywords' },
+                      { id: 'concise', label: 'Concise' }
+                    ].map(tone => (
+                      <button
+                        key={tone.id}
+                        onClick={() => setAiPolishTone(tone.id as any)}
+                        className={`px-2.5 py-1.5 rounded-lg border text-center transition-colors cursor-pointer ${
+                          aiPolishTone === tone.id ? 'border-purple-600 bg-purple-50 text-purple-700 font-bold' : 'border-slate-200 text-slate-600 hover:border-slate-300'
+                        }`}
+                      >
+                        {tone.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Polish Workbench Panel */}
+              <div className="md:col-span-2 bg-white rounded-2xl border border-slate-200 p-6 space-y-5 shadow-xs">
+                {aiPolishSection === 'summary' && (
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="font-bold text-base text-slate-900">Polish Professional Summary</h3>
+                      <p className="text-xs text-slate-500">Generates or rewrites your summary using your technical skills and target role.</p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-xs font-semibold text-slate-700">Current Summary</label>
+                      <textarea
+                        rows={4}
+                        value={currentResume.career_summary || ''}
+                        onChange={(e) => setCurrentResume({ ...currentResume, career_summary: e.target.value })}
+                        placeholder="Enter summary to polish or let AI generate from scratch..."
+                        className="w-full p-3 border border-slate-300 rounded-xl text-xs outline-hidden focus:ring-2 focus:ring-purple-500"
+                      />
+                    </div>
+
+                    <button
+                      onClick={() => handleAiGenerateSummary(aiPolishTone)}
+                      disabled={isAiLoading}
+                      className="px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                    >
+                      {isAiLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                      <span>Generate & Polish Summary</span>
+                    </button>
+                  </div>
+                )}
+
+                {aiPolishSection === 'objective' && (
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="font-bold text-base text-slate-900">Polish Career Objective</h3>
+                      <p className="text-xs text-slate-500">Crafts a sharp objective aligned with {currentResume.target_job_role || 'your target role'}.</p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-xs font-semibold text-slate-700">Current Objective</label>
+                      <textarea
+                        rows={3}
+                        value={currentResume.career_objective || ''}
+                        onChange={(e) => setCurrentResume({ ...currentResume, career_objective: e.target.value })}
+                        placeholder="Enter current objective..."
+                        className="w-full p-3 border border-slate-300 rounded-xl text-xs outline-hidden focus:ring-2 focus:ring-purple-500"
+                      />
+                    </div>
+
+                    <button
+                      onClick={handleAiGenerateObjective}
+                      disabled={isAiLoading}
+                      className="px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                    >
+                      {isAiLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                      <span>Generate & Polish Objective</span>
+                    </button>
+                  </div>
+                )}
+
+                {aiPolishSection === 'experience' && (
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="font-bold text-base text-slate-900">Polish Work Experience</h3>
+                      <p className="text-xs text-slate-500">Select any experience item to enhance responsibilities with action verbs and metrics.</p>
+                    </div>
+
+                    {currentResume.experience?.length === 0 ? (
+                      <p className="text-xs text-slate-400 italic">No experience items in this resume. Switch to the Builder to add work history.</p>
+                    ) : (
+                      currentResume.experience?.map((exp, idx) => (
+                        <div key={idx} className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                          <div className="flex justify-between items-center">
+                            <span className="font-bold text-xs text-slate-900">{exp.jobTitle} at {exp.company}</span>
+                            <button
+                              onClick={() => handleAiImproveExperience(idx)}
+                              disabled={isAiLoading}
+                              className="px-3 py-1 bg-purple-100 hover:bg-purple-200 text-purple-800 rounded-md text-xs font-bold flex items-center gap-1 cursor-pointer"
+                            >
+                              <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+                              <span>Polish with AI</span>
+                            </button>
+                          </div>
+                          <p className="text-xs text-slate-600">{exp.responsibilities}</p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+
+                {aiPolishSection === 'projects' && (
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="font-bold text-base text-slate-900">Polish Technical Projects</h3>
+                      <p className="text-xs text-slate-500">Highlight architecture, tech stacks, and quantifiable engineering milestones.</p>
+                    </div>
+
+                    {currentResume.projects?.length === 0 ? (
+                      <p className="text-xs text-slate-400 italic">No project items in this resume. Switch to the Builder to add projects.</p>
+                    ) : (
+                      currentResume.projects?.map((proj, idx) => (
+                        <div key={idx} className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                          <div className="flex justify-between items-center">
+                            <span className="font-bold text-xs text-slate-900">{proj.title}</span>
+                            <button
+                              onClick={() => handleAiImproveProject(idx)}
+                              disabled={isAiLoading}
+                              className="px-3 py-1 bg-purple-100 hover:bg-purple-200 text-purple-800 rounded-md text-xs font-bold flex items-center gap-1 cursor-pointer"
+                            >
+                              <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+                              <span>Polish with AI</span>
+                            </button>
+                          </div>
+                          <p className="text-xs text-slate-600">{proj.description}</p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 6: JOB RECOMMENDATIONS (REAL MYSQL DATA) */}
         {userTab === 'recommendations' && (
           <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in duration-200">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -1852,96 +2418,63 @@ export const UserPortal: React.FC = () => {
                 {recommendations.map(role => (
                   <div
                     key={role.roleId}
-                    className="bg-white rounded-2xl border border-slate-200 hover:border-purple-300 p-6 shadow-xs transition-all space-y-4"
+                    className="p-6 bg-white rounded-2xl border border-slate-200 shadow-xs hover:border-purple-300 transition-all space-y-4"
                   >
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div>
                         <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md">
+                          <h3 className="text-lg font-bold text-slate-900">{role.roleTitle}</h3>
+                          <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 bg-slate-100 text-slate-700 rounded">
                             {role.category}
                           </span>
-                          <span className="text-[10px] font-semibold text-slate-500">
-                            Exp: {role.minimumExperience}+ years ({role.experienceLevel})
-                          </span>
                         </div>
-                        <h2 className="text-lg font-bold text-slate-900 mt-1">{role.roleTitle}</h2>
-                        <p className="text-xs text-slate-600 max-w-2xl mt-0.5">{role.description}</p>
+                        <p className="text-xs text-slate-500 mt-0.5">{role.description}</p>
                       </div>
 
-                      {/* Match percentage ring */}
-                      <div className="text-right sm:border-l sm:pl-6 border-slate-100">
-                        <div className="text-3xl font-black text-emerald-600">{role.matchPercentage}%</div>
-                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Skill Alignment</div>
-                      </div>
-                    </div>
-
-                    {/* Matching vs Missing Skills */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                      {/* Matching */}
-                      <div className="p-3 bg-emerald-50/60 border border-emerald-200 rounded-xl space-y-2">
-                        <div className="font-bold text-emerald-900 flex items-center gap-1.5">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                          <span>Matching Skills ({role.matchingSkills.length})</span>
+                      <div className="flex items-center gap-4">
+                        <div className="text-right">
+                          <div className="text-xs text-slate-400 font-semibold">Match Score</div>
+                          <div className="text-2xl font-black text-purple-600">{role.matchPercentage}%</div>
                         </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {role.matchingSkills.length > 0 ? (
-                            role.matchingSkills.map((s, i) => (
-                              <span key={i} className="px-2 py-0.5 rounded text-[11px] font-semibold bg-white text-emerald-800 border border-emerald-300">
-                                ✓ {s}
-                              </span>
-                            ))
-                          ) : (
-                            <span className="text-slate-400 italic">No matching skills yet. Add skills to your resume!</span>
-                          )}
-                        </div>
-                      </div>
 
-                      {/* Missing Mandatory */}
-                      <div className="p-3 bg-red-50/60 border border-red-200 rounded-xl space-y-2">
-                        <div className="font-bold text-red-900 flex items-center gap-1.5">
-                          <AlertCircle className="w-3.5 h-3.5 text-red-600" />
-                          <span>Missing Mandatory Skills ({role.missingMandatory.length})</span>
-                        </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {role.missingMandatory.length > 0 ? (
-                            role.missingMandatory.map((m, i) => (
-                              <span key={i} className="px-2 py-0.5 rounded text-[11px] font-semibold bg-white text-red-700 border border-red-300">
-                                ⚠ {m.name} ({m.proficiency})
-                              </span>
-                            ))
-                          ) : (
-                            <span className="text-emerald-700 font-semibold">All mandatory skills satisfied!</span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Actions */}
-                    <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-                      <div className="text-[11px] text-slate-500">
-                        {role.recommendedProjects?.length ? `Suggested Projects: ${role.recommendedProjects.slice(0, 2).join(' • ')}` : ''}
-                      </div>
-
-                      <div className="flex gap-2">
                         <button
                           onClick={() => {
                             setSelectedAnalysisRole(role.roleId);
                             setUserTab('skill-gap');
                           }}
-                          className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-lg transition-colors cursor-pointer"
+                          className="px-4 py-2 bg-slate-900 hover:bg-purple-600 text-white font-bold text-xs rounded-xl transition-colors cursor-pointer whitespace-nowrap"
                         >
-                          Deep Skill Gap Analysis
+                          View Gap Analysis
                         </button>
-                        <button
-                          onClick={() => {
-                            setSelectedAnalysisRole(role.roleId);
-                            setUserTab('roadmap');
-                          }}
-                          className="px-3.5 py-1.5 bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
-                        >
-                          <span>Personal Roadmap</span>
-                          <ArrowRight className="w-3.5 h-3.5" />
-                        </button>
+                      </div>
+                    </div>
+
+                    {/* Skill Alignment Preview */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs pt-2 border-t border-slate-100">
+                      <div>
+                        <span className="font-bold text-emerald-700 block mb-1">
+                          Matching Skills ({role.matchingSkills.length})
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {role.matchingSkills.map((s, i) => (
+                            <span key={i} className="px-2 py-0.5 bg-emerald-50 text-emerald-800 rounded font-medium text-[11px] border border-emerald-200">
+                              ✓ {s}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <span className="font-bold text-amber-700 block mb-1">
+                          Missing Mandatory Skills ({role.missingMandatory.length})
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {role.missingMandatory.map((s, i) => (
+                            <span key={i} className="px-2 py-0.5 bg-amber-50 text-amber-800 rounded font-medium text-[11px] border border-amber-200">
+                              ! {s.name} ({s.proficiency})
+                            </span>
+                          ))}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1951,53 +2484,67 @@ export const UserPortal: React.FC = () => {
           </div>
         )}
 
-        {/* TAB 6: SKILL GAP ANALYSIS */}
+        {/* TAB 7: SKILL GAP ANALYSIS */}
         {userTab === 'skill-gap' && (
           <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in duration-200">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <h1 className="text-2xl font-black text-slate-900 tracking-tight">AI Skill Gap Analysis</h1>
-                <p className="text-xs text-slate-500">
-                  Select any target role to compare current proficiencies against live database requirements.
-                </p>
-              </div>
-
-              {/* Target Role Selector */}
-              <select
-                value={selectedAnalysisRole || ''}
-                onChange={(e) => {
-                  const id = parseInt(e.target.value, 10);
-                  setSelectedAnalysisRole(id);
-                  fetchCareerRecommendations(id);
-                }}
-                className="text-xs font-bold border border-slate-300 rounded-xl px-3.5 py-2 bg-white text-slate-800 outline-hidden focus:ring-2 focus:ring-purple-500 cursor-pointer shadow-xs"
-              >
-                {recommendations.map(r => (
-                  <option key={r.roleId} value={r.roleId}>{r.roleTitle} ({r.matchPercentage}% match)</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Active Role Card */}
             {(() => {
               const active = recommendations.find(r => r.roleId === selectedAnalysisRole) || recommendations[0];
-              if (!active) return null;
+              if (!active) {
+                return (
+                  <div className="p-8 text-center bg-white rounded-2xl border border-slate-200">
+                    <p className="text-xs text-slate-500">Select a job role from Job Recommendations to view skill gap breakdown.</p>
+                  </div>
+                );
+              }
 
               return (
                 <div className="space-y-6">
-                  {/* Overview Stats */}
-                  <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs grid grid-cols-1 sm:grid-cols-3 gap-6">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div>
-                      <div className="text-xs text-slate-500 font-semibold">Target Job Role</div>
-                      <div className="text-xl font-black text-slate-900 mt-1">{active.roleTitle}</div>
-                      <div className="text-xs text-purple-700 font-semibold">{active.category}</div>
+                      <h1 className="text-2xl font-black text-slate-900 tracking-tight">
+                        Skill Gap Analysis for {active.roleTitle}
+                      </h1>
+                      <p className="text-xs text-slate-500">
+                        Detailed comparison of your current skillset against active database role requirements.
+                      </p>
                     </div>
-                    <div>
-                      <div className="text-xs text-slate-500 font-semibold">Current Match Score</div>
-                      <div className="text-3xl font-black text-emerald-600 mt-1">{active.matchPercentage}%</div>
-                      <div className="text-[11px] text-slate-400">Relative to live requirements</div>
+
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={active.roleId}
+                        onChange={(e) => setSelectedAnalysisRole(parseInt(e.target.value, 10))}
+                        className="text-xs font-semibold border border-slate-300 rounded-lg px-3 py-1.5 bg-white text-slate-800 outline-hidden"
+                      >
+                        {recommendations.map(r => (
+                          <option key={r.roleId} value={r.roleId}>{r.roleTitle} ({r.matchPercentage}%)</option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => {
+                          setSelectedAnalysisRole(active.roleId);
+                          setUserTab('roadmap');
+                        }}
+                        className="px-3.5 py-1.5 bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Route className="w-3.5 h-3.5" />
+                        <span>View Roadmap</span>
+                      </button>
                     </div>
-                    <div>
+                  </div>
+
+                  {/* Summary Cards */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs">
+                      <div className="text-xs text-slate-500 font-semibold">Match Percentage</div>
+                      <div className="text-2xl font-black text-purple-600 mt-1">{active.matchPercentage}%</div>
+                      <div className="text-[11px] text-slate-400">Based on weighted requirement algorithms</div>
+                    </div>
+                    <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs">
+                      <div className="text-xs text-slate-500 font-semibold">Matching Verified Skills</div>
+                      <div className="text-2xl font-black text-emerald-600 mt-1">{active.matchingSkills.length}</div>
+                      <div className="text-[11px] text-slate-400">Ready for job interview verification</div>
+                    </div>
+                    <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs">
                       <div className="text-xs text-slate-500 font-semibold">Missing Skills to Learn</div>
                       <div className="text-2xl font-black text-red-600 mt-1">
                         {active.missingMandatory.length + active.missingPreferred.length}
@@ -2036,13 +2583,13 @@ export const UserPortal: React.FC = () => {
                                 )}
                               </div>
 
-                              {/* Progress Status Buttons */}
+                              {/* Progress Status Select */}
                               <div className="flex items-center gap-2">
                                 <span className="text-xs text-slate-500 font-semibold">Status:</span>
                                 <select
                                   value={currentStatus}
                                   onChange={(e) => handleUpdateSkillProgress(skill.name, e.target.value as any, skill.proficiency as any)}
-                                  className="text-xs font-semibold border border-slate-300 rounded-lg px-2.5 py-1 bg-white text-slate-800 outline-hidden"
+                                  className="text-xs font-semibold border border-slate-300 rounded-lg px-2.5 py-1 bg-white text-slate-800 outline-hidden cursor-pointer"
                                 >
                                   <option value="Not Started">Not Started</option>
                                   <option value="Learning">Learning</option>
@@ -2053,10 +2600,10 @@ export const UserPortal: React.FC = () => {
 
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-slate-600">
                               <div>
-                                <strong className="text-slate-800">Why it is important:</strong> {skill.description}
+                                <strong className="text-slate-800">Why it is important:</strong> {skill.description || 'Core requirement for production software design and scalable deployments.'}
                               </div>
                               <div>
-                                <strong className="text-slate-800">Practice Project:</strong> Build a standalone module or microservice utilizing {skill.name} with automated tests.
+                                <strong className="text-slate-800">Practice Project:</strong> Build a standalone module or test microservice implementing {skill.name}.
                               </div>
                             </div>
                           </div>
@@ -2070,7 +2617,7 @@ export const UserPortal: React.FC = () => {
           </div>
         )}
 
-        {/* TAB 7: LEARNING ROADMAP */}
+        {/* TAB 8: LEARNING ROADMAP */}
         {userTab === 'roadmap' && (
           <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in duration-200">
             <div className="flex justify-between items-center">
@@ -2139,6 +2686,121 @@ export const UserPortal: React.FC = () => {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* TAB 9: MY PROFILE & SETTINGS */}
+        {userTab === 'profile' && (
+          <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-200">
+            <div>
+              <h1 className="text-2xl font-black text-slate-900 tracking-tight">My Profile & Account Settings</h1>
+              <p className="text-xs text-slate-500">Manage your user information, security credentials, and preferences.</p>
+            </div>
+
+            {profileMessage && (
+              <div className={`p-4 rounded-xl text-xs font-bold border flex items-center gap-2 ${
+                profileMessage.type === 'success' ? 'bg-emerald-50 text-emerald-800 border-emerald-300' : 'bg-red-50 text-red-800 border-red-300'
+              }`}>
+                {profileMessage.type === 'success' ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <AlertCircle className="w-4 h-4 text-red-600" />}
+                <span>{profileMessage.text}</span>
+              </div>
+            )}
+
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+              <div className="p-6 border-b border-slate-100 flex items-center gap-4">
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-purple-700 to-indigo-600 text-white font-black text-2xl flex items-center justify-center shadow-md">
+                  {user?.name?.charAt(0).toUpperCase() || 'U'}
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900">{user?.name}</h2>
+                  <p className="text-xs text-slate-500">{user?.email}</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 bg-purple-100 text-purple-800 rounded">
+                      Role: {user?.role}
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      Member since {user?.created_at ? new Date(user.created_at).toLocaleDateString() : 'Active'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <form onSubmit={handleUpdateProfile} className="p-6 space-y-6">
+                <div className="space-y-4">
+                  <h3 className="text-sm font-bold text-slate-900">Personal Information</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Full Name</label>
+                      <input
+                        type="text"
+                        value={profileForm.name}
+                        onChange={(e) => setProfileForm({ ...profileForm, name: e.target.value })}
+                        required
+                        className="w-full p-2.5 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Email Address</label>
+                      <input
+                        type="email"
+                        value={profileForm.email}
+                        onChange={(e) => setProfileForm({ ...profileForm, email: e.target.value })}
+                        required
+                        className="w-full p-2.5 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4 pt-4 border-t border-slate-100">
+                  <h3 className="text-sm font-bold text-slate-900">Change Password (Optional)</h3>
+                  <p className="text-xs text-slate-500">Leave blank if you do not wish to change your password.</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Current Password</label>
+                      <input
+                        type="password"
+                        value={profileForm.currentPassword}
+                        onChange={(e) => setProfileForm({ ...profileForm, currentPassword: e.target.value })}
+                        placeholder="••••••••"
+                        className="w-full p-2.5 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">New Password</label>
+                      <input
+                        type="password"
+                        value={profileForm.newPassword}
+                        onChange={(e) => setProfileForm({ ...profileForm, newPassword: e.target.value })}
+                        placeholder="••••••••"
+                        className="w-full p-2.5 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Confirm New Password</label>
+                      <input
+                        type="password"
+                        value={profileForm.confirmNewPassword}
+                        onChange={(e) => setProfileForm({ ...profileForm, confirmNewPassword: e.target.value })}
+                        placeholder="••••••••"
+                        className="w-full p-2.5 border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-purple-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-4 border-t border-slate-100">
+                  <button
+                    type="submit"
+                    disabled={isUpdatingProfile}
+                    className="px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                  >
+                    {isUpdatingProfile ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                    <span>Save Profile Changes</span>
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
         )}
       </main>

@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { ResumeRenderer } from '../components/templates/ResumeRenderer';
+import { Resume } from '../types';
 import {
   Sparkles,
   ArrowRight,
@@ -16,7 +18,8 @@ import {
   Briefcase,
   Zap,
   BarChart3,
-  ShieldAlert
+  ShieldAlert,
+  X
 } from 'lucide-react';
 
 export const LandingPage: React.FC = () => {
@@ -361,6 +364,15 @@ export const LandingPage: React.FC = () => {
 
               <div className="p-4 bg-slate-50 border-t border-slate-100 flex gap-2">
                 <button
+                  type="button"
+                  onClick={() => setPreviewTemplate(tpl.id)}
+                  className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  <span>Preview</span>
+                </button>
+                <button
+                  type="button"
                   onClick={() => {
                     if (user) {
                       navigateToBuilder();
@@ -368,7 +380,7 @@ export const LandingPage: React.FC = () => {
                       openAuthModal('register');
                     }
                   }}
-                  className="flex-1 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-purple-600 rounded-lg transition-colors text-center"
+                  className="flex-1 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-purple-600 rounded-lg transition-colors text-center cursor-pointer"
                 >
                   Use Template
                 </button>
@@ -522,6 +534,119 @@ export const LandingPage: React.FC = () => {
           </div>
         </div>
       </section>
+
+      {/* TEMPLATE PREVIEW MODAL */}
+      {previewTemplate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-slate-100 rounded-3xl max-w-4xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden">
+            <div className="bg-white px-6 py-4 border-b border-slate-200 flex justify-between items-center shrink-0">
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-bold uppercase tracking-wider px-2.5 py-1 bg-purple-100 text-purple-800 rounded-md">
+                  {previewTemplate}
+                </span>
+                <h3 className="font-bold text-base text-slate-900">
+                  {templatesData.find(t => t.id === previewTemplate)?.name} Preview
+                </h3>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setPreviewTemplate(null);
+                    if (user) navigateToBuilder();
+                    else openAuthModal('register');
+                  }}
+                  className="px-4 py-1.5 bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs rounded-lg transition-colors cursor-pointer"
+                >
+                  Use This Style
+                </button>
+                <button
+                  onClick={() => setPreviewTemplate(null)}
+                  className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 flex justify-center bg-slate-200/50">
+              <div className="w-full max-w-[800px] shadow-lg rounded-xl overflow-hidden bg-white">
+                <ResumeRenderer
+                  resume={{
+                    id: 0,
+                    user_id: 0,
+                    template_id: previewTemplate,
+                    title: 'Sample Candidate Resume',
+                    target_job_role: 'Full Stack Engineer',
+                    personal_info: {
+                      fullName: 'Alex Vance',
+                      email: 'alex.vance@example.com',
+                      phone: '+1 (555) 234-5678',
+                      location: 'San Francisco, CA',
+                      linkedin: 'linkedin.com/in/alexvance',
+                      github: 'github.com/alexvance',
+                      portfolio: 'alexvance.dev'
+                    },
+                    career_summary: 'Versatile Full Stack Software Engineer with 3+ years of experience engineering scalable web applications, REST APIs, and microservices. Proven success optimizing database queries, decreasing latency by 35%, and delivering robust user interfaces using modern reactive frameworks.',
+                    career_objective: 'To leverage strong engineering principles, clean code discipline, and scalable architecture skills to accelerate engineering deliverables.',
+                    education: [
+                      {
+                        institution: 'University of California, Berkeley',
+                        degree: 'Bachelor of Science',
+                        branch: 'Computer Science',
+                        graduationYear: '2024',
+                        cgpa: '3.88 / 4.0'
+                      }
+                    ],
+                    skills: {
+                      programmingLanguages: ['JavaScript', 'TypeScript', 'Python', 'SQL'],
+                      frameworks: ['React.js', 'Node.js', 'Express.js', 'Tailwind CSS'],
+                      databases: ['PostgreSQL', 'MySQL', 'Redis'],
+                      tools: ['Git', 'Docker', 'AWS', 'Kubernetes'],
+                      technicalSkills: ['REST APIs', 'Data Structures', 'JWT Auth', 'WebSockets'],
+                      softSkills: ['Problem Solving', 'Agile Teamwork', 'Technical Writing']
+                    },
+                    projects: [
+                      {
+                        title: 'DevPulse - Agile Sprint Manager',
+                        description: 'Architected team project workspace with real-time sprint Kanban boards, role-based authentication, and automated email alerts.',
+                        technologies: 'React, Node.js, Express, PostgreSQL',
+                        link: 'https://github.com/alexvance/devpulse',
+                        responsibilities: 'Implemented REST APIs with JWT auth and structured relational DB schema.'
+                      }
+                    ],
+                    experience: [
+                      {
+                        company: 'Apex Software Labs',
+                        jobTitle: 'Associate Software Engineer',
+                        duration: '2024 - Present',
+                        responsibilities: 'Engineered customer-facing dashboard components in React and improved API query speeds by 30%.',
+                        achievements: 'Spearheaded unit testing coverage expansion to 85%.'
+                      }
+                    ],
+                    certifications: [
+                      {
+                        name: 'AWS Certified Cloud Practitioner',
+                        issuer: 'Amazon Web Services',
+                        year: '2024'
+                      }
+                    ],
+                    additional_sections: {
+                      languages: ['English (Fluent)', 'Spanish (Conversational)'],
+                      awards: ['First Place Hackathon Winner 2023'],
+                      extracurricular: ['Open Source Contributor']
+                    },
+                    completion_percentage: 95,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                  }}
+                  templateId={previewTemplate}
+                  elementId="landing-preview-doc"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

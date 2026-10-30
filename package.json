@@ -7,6 +7,7 @@
     "dev": "tsx server.ts",
     "build": "vite build",
     "start": "tsx server.ts",
+    "db:setup": "tsx database/setup.ts",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"
   },
@@ -19,6 +20,9 @@
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "express-session": "^1.19.0",
+    "html2canvas": "^1.4.1",
+    "html2canvas-pro": "^2.6.0",
+    "jspdf": "^4.2.1",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "mysql2": "^3.24.6",

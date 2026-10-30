@@ -133,3 +133,68 @@ authRouter.get('/me', (req: Request, res: Response) => {
   const { password_hash: _, ...safeUser } = req.user;
   res.json({ user: safeUser });
 });
+
+// PUT /api/auth/profile
+authRouter.put('/profile', (req: Request, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ error: 'Authentication required.' });
+    return;
+  }
+
+  try {
+    const { name, email, currentPassword, newPassword } = req.body;
+    const updates: { name?: string; email?: string; password_hash?: string } = {};
+
+    if (name && name.trim()) {
+      updates.name = name.trim();
+    }
+
+    if (email && email.trim()) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email.trim())) {
+        res.status(400).json({ error: 'Please provide a valid email address.' });
+        return;
+      }
+      const existing = db.findUserByEmail(email.trim());
+      if (existing && existing.id !== req.user.id) {
+        res.status(409).json({ error: 'This email is already in use by another account.' });
+        return;
+      }
+      updates.email = email.trim();
+    }
+
+    if (newPassword) {
+      if (!currentPassword) {
+        res.status(400).json({ error: 'Current password is required to set a new password.' });
+        return;
+      }
+      const valid = bcrypt.compareSync(currentPassword, req.user.password_hash);
+      if (!valid) {
+        res.status(401).json({ error: 'Current password is incorrect.' });
+        return;
+      }
+      if (newPassword.length < 6) {
+        res.status(400).json({ error: 'New password must be at least 6 characters long.' });
+        return;
+      }
+      const salt = bcrypt.genSaltSync(10);
+      updates.password_hash = bcrypt.hashSync(newPassword, salt);
+    }
+
+    const updatedUser = db.updateUserProfile(req.user.id, updates);
+    if (!updatedUser) {
+      res.status(404).json({ error: 'User not found.' });
+      return;
+    }
+
+    const { password_hash: _, ...safeUser } = updatedUser;
+    res.json({
+      message: 'Profile updated successfully.',
+      user: safeUser
+    });
+  } catch (err: any) {
+    console.error('Update profile error:', err);
+    res.status(500).json({ error: 'Failed to update profile.' });
+  }
+});
+

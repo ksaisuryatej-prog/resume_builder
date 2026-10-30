@@ -117,15 +117,19 @@ export const Navbar: React.FC = () => {
               </button>
 
               {/* User Profile Badge */}
-              <div className="hidden lg:flex items-center gap-2 pl-2 border-l border-slate-200">
-                <div className="w-8 h-8 rounded-full bg-purple-600/10 text-purple-700 flex items-center justify-center font-bold text-xs">
+              <button
+                onClick={() => handleNav('user', 'profile')}
+                title="View & Edit Profile"
+                className="hidden lg:flex items-center gap-2 pl-2 border-l border-slate-200 hover:opacity-80 transition-opacity cursor-pointer text-left"
+              >
+                <div className="w-8 h-8 rounded-full bg-purple-600/10 text-purple-700 flex items-center justify-center font-bold text-xs ring-1 ring-purple-600/20">
                   {user.name.charAt(0).toUpperCase()}
                 </div>
                 <div className="text-left text-xs">
                   <div className="font-semibold text-slate-900 truncate max-w-[120px]">{user.name}</div>
                   <div className="text-[10px] text-slate-500 capitalize">{user.role.toLowerCase()}</div>
                 </div>
-              </div>
+              </button>
 
               {/* Logout Button */}
               <button

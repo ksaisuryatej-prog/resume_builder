@@ -13,12 +13,14 @@ interface ResumeRendererProps {
   resume: Resume;
   templateId?: string;
   isPrintMode?: boolean;
+  elementId?: string;
 }
 
 export const ResumeRenderer: React.FC<ResumeRendererProps> = ({
   resume,
   templateId,
   isPrintMode = false,
+  elementId = 'resume-preview-document',
 }) => {
   const currentTemplate = templateId || resume.template_id || 'professional';
 
@@ -46,7 +48,7 @@ export const ResumeRenderer: React.FC<ResumeRendererProps> = ({
 
   return (
     <div
-      id="resume-preview-document"
+      id={elementId}
       className={`bg-white shadow-2xl rounded-sm print:shadow-none print:rounded-none mx-auto w-full max-w-[800px] min-h-[1050px] text-slate-800 transition-all duration-300 ${
         isPrintMode ? 'p-0' : 'p-8 sm:p-12'
       }`}

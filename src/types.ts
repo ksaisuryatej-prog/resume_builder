@@ -13,8 +13,10 @@ export interface EducationEntry {
   institution: string;
   degree: string;
   branch: string;
+  startYear?: string;
   graduationYear: string;
   cgpa: string;
+  coursework?: string;
 }
 
 export interface ProjectEntry {
@@ -23,6 +25,7 @@ export interface ProjectEntry {
   technologies: string;
   link?: string;
   responsibilities?: string;
+  achievements?: string;
 }
 
 export interface ExperienceEntry {
@@ -31,12 +34,16 @@ export interface ExperienceEntry {
   duration: string;
   responsibilities: string;
   achievements?: string;
+  technologies?: string;
 }
 
 export interface CertificationEntry {
   name: string;
   issuer: string;
   year: string;
+  expirationDate?: string;
+  credentialId?: string;
+  credentialUrl?: string;
 }
 
 export interface ResumePersonalInfo {
