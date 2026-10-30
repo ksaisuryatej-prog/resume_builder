@@ -253,11 +253,11 @@ export const AdminPortal: React.FC = () => {
         setEditingJobRole(null);
         fetchJobRoles();
       } else {
-        const err = await res.json();
-        alert(err.error || 'Failed to save job role.');
+        const err = await res.json().catch(() => ({}));
+        showNotification(err.error || 'Failed to save job role.');
       }
     } catch (err: any) {
-      alert(err.message || 'Error occurred.');
+      showNotification(err.message || 'Error occurred.');
     }
   };
 
@@ -293,11 +293,11 @@ export const AdminPortal: React.FC = () => {
         showNotification(`Assigned ${newSkillForm.skill_name} to role requirements.`);
         fetchJobRoles();
       } else {
-        const err = await res.json();
-        alert(err.error || 'Failed to assign skill.');
+        const err = await res.json().catch(() => ({}));
+        showNotification(err.error || 'Failed to assign skill.');
       }
     } catch (err: any) {
-      alert(err.message || 'Error adding skill.');
+      showNotification(err.message || 'Error adding skill.');
     }
   };
 
@@ -642,9 +642,8 @@ export const AdminPortal: React.FC = () => {
                           </button>
                           <button
                             onClick={async () => {
-                              if (!confirm(`Are you sure you want to delete "${r.title}"?`)) return;
                               await apiCall(`/api/admin/job-roles/${r.id}`, { method: 'DELETE' });
-                              showNotification('Job role deleted successfully.');
+                              showNotification(`Job role "${r.title}" deleted.`);
                               fetchJobRoles();
                             }}
                             title="Delete Job Role"
@@ -695,14 +694,13 @@ export const AdminPortal: React.FC = () => {
                   </div>
                   <button
                     onClick={async () => {
-                      if (!confirm(`Delete skill ${s.name}?`)) return;
                       const res = await apiCall(`/api/admin/skills/${s.id}`, { method: 'DELETE' });
                       if (res.ok) {
-                        showNotification('Skill deleted successfully.');
+                        showNotification(`Skill "${s.name}" deleted.`);
                         fetchSkills();
                       } else {
-                        const err = await res.json();
-                        alert(err.error || 'Failed to delete skill.');
+                        const err = await res.json().catch(() => ({}));
+                        showNotification(err.error || 'Failed to delete skill.');
                       }
                     }}
                     className="text-slate-300 hover:text-red-500 p-1 cursor-pointer"
@@ -756,8 +754,8 @@ export const AdminPortal: React.FC = () => {
                               showNotification(`User marked ${newStatus}.`);
                               fetchUsers();
                             } else {
-                              const err = await res.json();
-                              alert(err.error);
+                              const err = await res.json().catch(() => ({}));
+                              showNotification(err.error || 'Failed to update user status.');
                             }
                           }}
                           className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${u.status === 'active' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'}`}
@@ -769,14 +767,13 @@ export const AdminPortal: React.FC = () => {
                       <td className="p-4 text-right">
                         <button
                           onClick={async () => {
-                            if (!confirm(`Delete user ${u.name}?`)) return;
                             const res = await apiCall(`/api/admin/users/${u.id}`, { method: 'DELETE' });
                             if (res.ok) {
-                              showNotification('User deleted.');
+                              showNotification(`User "${u.name}" deleted.`);
                               fetchUsers();
                             } else {
-                              const err = await res.json();
-                              alert(err.error);
+                              const err = await res.json().catch(() => ({}));
+                              showNotification(err.error || 'Failed to delete user.');
                             }
                           }}
                           className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg cursor-pointer"
@@ -825,7 +822,6 @@ export const AdminPortal: React.FC = () => {
                       <td className="p-4 text-right">
                         <button
                           onClick={async () => {
-                            if (!confirm('Delete this resume record?')) return;
                             await apiCall(`/api/admin/resumes/${r.id}`, { method: 'DELETE' });
                             showNotification('Resume deleted.');
                             fetchResumes();
@@ -1189,8 +1185,8 @@ export const AdminPortal: React.FC = () => {
                   setSkillModalOpen(false);
                   fetchSkills();
                 } else {
-                  const err = await res.json();
-                  alert(err.error);
+                  const err = await res.json().catch(() => ({}));
+                  showNotification(err.error || 'Failed to create skill.');
                 }
               }}
               className="p-5 space-y-3 text-xs"

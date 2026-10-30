@@ -5,7 +5,7 @@ import { requireAuth } from '../middleware/auth.js';
 export const aiRouter = Router();
 
 // POST /api/ai/generate - Generate summary or objective
-aiRouter.post('/generate', requireAuth, async (req: Request, res: Response) => {
+aiRouter.post('/generate', async (req: Request, res: Response) => {
   try {
     const { type, fullName, targetJobRole, yearsOfExperience, skills, education, existingSummary, tone } = req.body;
     const userId = req.user?.id || null;
@@ -37,7 +37,7 @@ aiRouter.post('/generate', requireAuth, async (req: Request, res: Response) => {
 });
 
 // POST /api/ai/improve - Improve text with active verbs and impact
-aiRouter.post('/improve', requireAuth, async (req: Request, res: Response) => {
+aiRouter.post('/improve', async (req: Request, res: Response) => {
   try {
     const { roleOrProject, rawText, technologies } = req.body;
     const userId = req.user?.id || null;
@@ -61,7 +61,7 @@ aiRouter.post('/improve', requireAuth, async (req: Request, res: Response) => {
 });
 
 // POST /api/ai/suggest-skills - Suggest ATS keywords & action verbs
-aiRouter.post('/suggest-skills', requireAuth, async (req: Request, res: Response) => {
+aiRouter.post('/suggest-skills', async (req: Request, res: Response) => {
   try {
     const { targetJobRole, currentSkills } = req.body;
     const userId = req.user?.id || null;

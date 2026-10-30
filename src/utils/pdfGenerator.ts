@@ -162,9 +162,18 @@ export async function generateResumePdf(
     // Collect natural break positions from DOM elements (sections, headers, cards)
     // to prevent cutting text halfway through a line or breaking headers
     const candidateBreakTops: number[] = [];
-    const elementsToInspect = renderTarget.querySelectorAll(
-      'section, header, footer, article, h2, h3, .p-3, .p-3.5, .p-4, .p-5, .p-6, .border-b-2, .rounded-xl, [data-section]'
-    );
+    let elementsToInspect: Element[] = [];
+    try {
+      elementsToInspect = Array.from(
+        renderTarget.querySelectorAll(
+          'section, header, footer, article, h2, h3, .p-3, [class*="p-3.5"], .p-4, .p-5, .p-6, .border-b-2, .rounded-xl, [data-section]'
+        )
+      );
+    } catch (_) {
+      elementsToInspect = Array.from(
+        renderTarget.querySelectorAll('section, header, footer, article, h2, h3')
+      );
+    }
     const targetRect = renderTarget.getBoundingClientRect();
 
     elementsToInspect.forEach((el) => {

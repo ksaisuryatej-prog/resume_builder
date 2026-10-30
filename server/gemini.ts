@@ -6,7 +6,7 @@ let aiInstance: GoogleGenAI | null = null;
 function getAiClient(): GoogleGenAI {
   const apiKey = (process.env.GEMINI_API_KEY || '').trim();
   if (!apiKey) {
-    throw new Error('GEMINI_API_KEY is not configured in .env. Please fill in your key to enable live AI generation.');
+    throw new Error('GEMINI_API_KEY is not configured. Please configure your key in Settings > Secrets to enable live AI generation.');
   }
   if (!aiInstance) {
     aiInstance = new GoogleGenAI({
@@ -20,12 +20,54 @@ function getAiClient(): GoogleGenAI {
   }
   return aiInstance;
 }
-function withTimeout<T>(promise: Promise<T>, ms = 6000): Promise<T> {
+
+function withTimeout<T>(promise: Promise<T>, ms = 15000): Promise<T> {
   return Promise.race([
     promise,
     new Promise<T>((_, reject) => setTimeout(() => reject(new Error('AI request timeout')), ms))
   ]);
 }
+
+/**
+ * Executes a Gemini model call with automatic fallback from gemini-3.8-flash
+ * to gemini-3.1-flash-lite if rate limits or quota exhaustion (429) occur.
+ */
+async function generateWithCascade(
+  ai: GoogleGenAI,
+  params: { contents: string; config?: any }
+): Promise<string> {
+  const modelsToTry = ['gemini-3.8-flash', 'gemini-3.1-flash-lite'];
+
+  for (let i = 0; i < modelsToTry.length; i++) {
+    const model = modelsToTry[i];
+    try {
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model,
+          contents: params.contents,
+          config: params.config,
+        })
+      );
+      const text = response.text?.trim() || '';
+      if (text) return text;
+    } catch (err: any) {
+      const isQuotaOrLimit =
+        err?.status === 429 ||
+        err?.message?.includes('429') ||
+        err?.message?.includes('RESOURCE_EXHAUSTED') ||
+        err?.message?.includes('quota');
+
+      console.warn(`[Gemini Cascade] Model ${model} encountered ${err?.message?.slice(0, 80)}. Falling back to next model...`);
+
+      if (i === modelsToTry.length - 1) {
+        throw err;
+      }
+    }
+  }
+
+  throw new Error('All AI models failed to return content.');
+}
+
 export const GeminiService = {
   /**
    * Generates or improves a professional summary based on user details
@@ -37,9 +79,10 @@ export const GeminiService = {
     skills?: string[];
     education?: string;
     existingSummary?: string;
-    tone?: 'concise' | 'impactful' | 'executive';
+    tone?: 'concise' | 'impactful' | 'executive' | 'impact' | 'ats';
   }): Promise<string> {
     const ai = getAiClient();
+    const cleanTone = params.tone === 'impact' ? 'impactful' : (params.tone || 'impactful');
     const prompt = `You are an expert career strategist and executive resume writer.
 Task: ${params.existingSummary ? 'Improve and optimize this existing resume summary' : 'Generate an impactful, ATS-optimized professional resume summary'}.
 
@@ -50,7 +93,7 @@ Candidate Context:
 - Core Skills: ${params.skills?.join(', ') || 'Modern full-stack development, database architecture'}
 - Education: ${params.education || 'Computer Science / Engineering degree'}
 ${params.existingSummary ? `- Existing Summary Draft: "${params.existingSummary}"` : ''}
-- Desired Tone: ${params.tone || 'impactful'}
+- Desired Tone: ${cleanTone}
 
 Guidelines:
 1. Return 3 to 4 punchy sentences with active verbs and quantifiable impact.
@@ -59,19 +102,19 @@ Guidelines:
 4. Output ONLY the polished summary paragraph directly without quotation marks or conversational commentary.`;
 
     try {
-      const response = await withTimeout(ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt,
-      }));
-
-      const text = response.text?.trim() || '';
+      const text = await generateWithCascade(ai, { contents: prompt });
       db.logAiUsage(userId, 'generate_summary', 120, 80, 'success');
       return text;
     } catch (error: any) {
       console.error('Gemini generateSummary error:', error);
       db.logAiUsage(userId, 'generate_summary', 0, 0, 'failed', error?.message);
-      // Graceful professional fallback if offline or API key missing
-      return `Results-driven ${params.targetJobRole || 'Software Professional'} with demonstrated experience in modern software delivery and scalable system design. Skilled in ${params.skills?.slice(0, 4).join(', ') || 'end-to-end development, API engineering, and relational databases'}. Proven track record of architecting reliable, maintainable solutions and collaborating across agile teams to achieve business objectives.`;
+
+      // Context-aware dynamic fallback reflecting the exact candidate inputs
+      const skillsStr = params.skills?.length ? params.skills.slice(0, 4).join(', ') : 'modern software development and system architecture';
+      if (params.existingSummary && params.existingSummary.trim().length > 15) {
+        return `${params.existingSummary.trim()} Demonstrated expertise in ${skillsStr}, applying proactive problem-solving to deliver scalable and maintainable solutions.`;
+      }
+      return `Results-driven ${params.targetJobRole || 'Professional'} with hands-on expertise in ${skillsStr}. Adept at designing robust solutions, collaborating across cross-functional teams, and consistently delivering high-quality outcomes.`;
     }
   },
 
@@ -95,16 +138,13 @@ Rules:
 - Return ONLY the two sentences without preamble or quotes.`;
 
     try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt,
-      });
-      const text = response.text?.trim() || '';
+      const text = await generateWithCascade(ai, { contents: prompt });
       db.logAiUsage(userId, 'generate_objective', 90, 40, 'success');
       return text;
     } catch (error: any) {
       db.logAiUsage(userId, 'generate_objective', 0, 0, 'failed', error?.message);
-      return `Dedicated and forward-thinking ${params.targetJobRole} seeking to leverage core proficiencies in software engineering and modern tech stacks to deliver high-impact enterprise solutions while continuing to expand technical mastery.`;
+      const skillsPart = params.topSkills?.length ? `proficiencies in ${params.topSkills.slice(0, 3).join(', ')}` : 'technical proficiencies';
+      return `Dedicated and forward-thinking ${params.targetJobRole} seeking to leverage core ${skillsPart} to deliver high-impact enterprise solutions while continuing to expand engineering excellence.`;
     }
   },
 
@@ -132,16 +172,11 @@ Instructions:
 5. Provide ONLY the improved text directly without conversational intro.`;
 
     try {
-      const response = await withTimeout(ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt,
-      }));
-      const text = response.text?.trim() || '';
+      const text = await generateWithCascade(ai, { contents: prompt });
       db.logAiUsage(userId, 'improve_bullet_points', 130, 90, 'success');
       return text;
     } catch (error: any) {
       db.logAiUsage(userId, 'improve_bullet_points', 0, 0, 'failed', error?.message);
-      // Intelligent ATS action-verb enhancement when offline or API key is not configured locally
       const clean = params.rawText.trim().replace(/^\s*[-•*]\s*/gm, '');
       const lines = clean.split('\n').filter(Boolean);
       if (lines.length > 0) {
@@ -185,15 +220,10 @@ Format strictly as JSON with keys:
 }`;
 
     try {
-      const response = await withTimeout(ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+      const text = await generateWithCascade(ai, {
         contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-        },
-      }));
-
-      const text = response.text?.trim() || '{}';
+        config: { responseMimeType: 'application/json' }
+      });
       const parsed = JSON.parse(text);
       db.logAiUsage(userId, 'suggest_keywords', 150, 110, 'success');
       return {
@@ -234,11 +264,7 @@ Rules:
 - Keep the response to 3 clear, motivating sentences. Output ONLY the response text.`;
 
     try {
-      const response = await withTimeout(ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt,
-      }));
-      const text = response.text?.trim() || '';
+      const text = await generateWithCascade(ai, { contents: prompt });
       db.logAiUsage(userId, 'explain_match', 140, 80, 'success');
       return text;
     } catch (error: any) {
@@ -281,15 +307,10 @@ Return strictly a JSON array of objects:
 ]`;
 
     try {
-      const response = await withTimeout(ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+      const text = await generateWithCascade(ai, {
         contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-        },
-      }));
-
-      const text = response.text?.trim() || '[]';
+        config: { responseMimeType: 'application/json' }
+      });
       const parsed = JSON.parse(text);
       db.logAiUsage(userId, 'generate_roadmap', 180, 220, 'success');
       return Array.isArray(parsed) && parsed.length > 0 ? parsed : this.fallbackRoadmap(params.missingSkills);

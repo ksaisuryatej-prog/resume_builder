@@ -467,7 +467,6 @@ export const UserPortal: React.FC = () => {
 
   // Delete Resume Function
   const handleDeleteResume = async (resumeId: number) => {
-    if (!window.confirm('Are you sure you want to delete this resume? This cannot be undone.')) return;
     try {
       const res = await fetch(`/api/resumes/${resumeId}`, {
         method: 'DELETE',
@@ -483,9 +482,13 @@ export const UserPortal: React.FC = () => {
         await fetchResumes();
         setSaveMessage({ text: 'Resume deleted successfully.', type: 'success' });
         setTimeout(() => setSaveMessage(null), 3000);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setSaveMessage({ text: err.error || 'Failed to delete resume.', type: 'error' });
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Delete error:', err);
+      setSaveMessage({ text: err.message || 'Error deleting resume.', type: 'error' });
     }
   };
 
@@ -501,6 +504,7 @@ export const UserPortal: React.FC = () => {
         ...(currentResume.skills?.technicalSkills || [])
       ];
 
+      const cleanTone = tone === 'impact' ? 'impactful' : tone;
       const res = await fetch('/api/ai/generate', {
         method: 'POST',
         headers: {
@@ -514,7 +518,7 @@ export const UserPortal: React.FC = () => {
           skills: allSkills,
           education: currentResume.education?.[0]?.degree,
           existingSummary: currentResume.career_summary,
-          tone
+          tone: cleanTone
         }),
         credentials: 'include'
       });
@@ -535,10 +539,16 @@ export const UserPortal: React.FC = () => {
               setTimeout(() => setSaveMessage(null), 3500);
             }
           });
+        } else {
+          setSaveMessage({ text: data.error || 'No summary returned by AI service.', type: 'error' });
         }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setSaveMessage({ text: errData.error || 'Failed to generate summary.', type: 'error' });
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('AI summary error:', err);
+      setSaveMessage({ text: err.message || 'Network error generating summary.', type: 'error' });
     } finally {
       setIsAiLoading(false);
     }
@@ -579,10 +589,16 @@ export const UserPortal: React.FC = () => {
               setTimeout(() => setSaveMessage(null), 3500);
             }
           });
+        } else {
+          setSaveMessage({ text: data.error || 'No objective returned by AI service.', type: 'error' });
         }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setSaveMessage({ text: errData.error || 'Failed to generate objective.', type: 'error' });
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('AI objective error:', err);
+      setSaveMessage({ text: err.message || 'Network error generating objective.', type: 'error' });
     } finally {
       setIsAiLoading(false);
     }
@@ -626,10 +642,16 @@ export const UserPortal: React.FC = () => {
               setTimeout(() => setSaveMessage(null), 3500);
             }
           });
+        } else {
+          setSaveMessage({ text: data.error || 'Failed to improve project description.', type: 'error' });
         }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setSaveMessage({ text: errData.error || 'Failed to improve project.', type: 'error' });
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('AI improve project error:', err);
+      setSaveMessage({ text: err.message || 'Network error improving project.', type: 'error' });
     } finally {
       setIsAiLoading(false);
     }
@@ -672,10 +694,16 @@ export const UserPortal: React.FC = () => {
               setTimeout(() => setSaveMessage(null), 3500);
             }
           });
+        } else {
+          setSaveMessage({ text: data.error || 'Failed to improve experience description.', type: 'error' });
         }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setSaveMessage({ text: errData.error || 'Failed to improve experience.', type: 'error' });
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('AI improve experience error:', err);
+      setSaveMessage({ text: err.message || 'Network error improving experience.', type: 'error' });
     } finally {
       setIsAiLoading(false);
     }

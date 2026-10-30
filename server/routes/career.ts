@@ -53,8 +53,8 @@ function getCandidateSkills(userId: number, explicitSkills?: string[]): { skillN
   return { skillNames, skillsMap };
 }
 
-// GET /api/career/roles
-careerRouter.get('/roles', (_req: Request, res: Response) => {
+// GET /api/career/roles & /api/career/job-roles
+careerRouter.get(['/roles', '/job-roles'], (_req: Request, res: Response) => {
   const roles = db.getActiveJobRoles();
   const detailed = roles.map(role => {
     const roleSkills = db.getRoleSkills(role.id);
@@ -63,7 +63,73 @@ careerRouter.get('/roles', (_req: Request, res: Response) => {
       skills: roleSkills
     };
   });
-  res.json({ roles: detailed });
+  res.json({ roles: detailed, jobRoles: detailed });
+});
+
+// GET /api/career/skills
+careerRouter.get('/skills', (_req: Request, res: Response) => {
+  const skills = db.getAllSkills();
+  res.json({ skills });
+});
+
+// GET /api/career/recommendations (convenience GET endpoint for user recommendations)
+careerRouter.get('/recommendations', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const { skillNames } = getCandidateSkills(userId);
+    const activeRoles = db.getActiveJobRoles();
+
+    const recommendations = activeRoles.map(role => {
+      const roleSkills = db.getRoleSkills(role.id);
+      let totalWeight = 0;
+      let earned = 0;
+      const matchingSkills: string[] = [];
+      const missingMandatory: any[] = [];
+      const missingPreferred: any[] = [];
+
+      for (const rs of roleSkills) {
+        const lowerName = (rs.skill_name || '').toLowerCase();
+        const baseWeight = rs.importance_weight || 5;
+        const multiplier = rs.requirement_type === 'mandatory' ? 1.8 : 1.2;
+        const pts = baseWeight * multiplier;
+        totalWeight += pts;
+
+        let has = skillNames.has(lowerName);
+        if (!has) {
+          for (const s of skillNames) {
+            if (s.includes(lowerName) || lowerName.includes(s)) { has = true; break; }
+          }
+        }
+
+        if (has) {
+          earned += pts;
+          matchingSkills.push(rs.skill_name || '');
+        } else if (rs.requirement_type === 'mandatory') {
+          missingMandatory.push({ name: rs.skill_name, proficiency: rs.required_proficiency });
+        } else {
+          missingPreferred.push({ name: rs.skill_name, proficiency: rs.required_proficiency });
+        }
+      }
+
+      const matchPercentage = totalWeight > 0 ? Math.round((earned / totalWeight) * 100) : 0;
+      return {
+        roleId: role.id,
+        roleTitle: role.title,
+        category: role.category,
+        experienceLevel: role.experience_level,
+        matchPercentage,
+        matchingSkills,
+        missingMandatory,
+        missingPreferred
+      };
+    });
+
+    recommendations.sort((a, b) => b.matchPercentage - a.matchPercentage);
+    res.json({ recommendations });
+  } catch (err: any) {
+    console.error('Get recommendations error:', err);
+    res.status(500).json({ error: 'Failed to retrieve recommendations.' });
+  }
 });
 
 // POST /api/career/analyze
